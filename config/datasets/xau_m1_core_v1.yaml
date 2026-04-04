@@ -1,0 +1,27 @@
+schema_version: "1.0.0"
+dataset_name: "xau_m1_core"
+version: "1.0.0"
+description: "Phase 1 compiler-backed XAUUSD M1 core dataset"
+symbols:
+  - "XAUUSD"
+date_from: "2026-04-01"
+date_to: "2026-04-30"
+base_clock: "M1"
+state_version_ref: "state.default@1.0.0"
+feature_selectors:
+  - "time/*"
+  - "session/*"
+  - "quality/*"
+label_pack_ref: "core_tb_volscaled@1.0.0"
+filters:
+  - "exclude:filled_rows"
+split_policy: "temporal_holdout"
+train_ratio: 0.70
+val_ratio: 0.15
+test_ratio: 0.15
+embargo_rows: 240
+truth_policy_ref: "truth.default@1.0.0"
+publish_on_accept: true
+tags:
+  - "phase1"
+  - "xau"
