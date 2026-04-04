@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,19 @@ def build_id_now() -> str:
 
 
 def code_version() -> str:
-    """Best-effort code version identifier without assuming git is available."""
+    """Best-effort code version identifier."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        sha = result.stdout.strip()
+        if sha:
+            return sha
+    except Exception:
+        pass
     return "workspace-local-no-git"
 
 
@@ -47,8 +60,8 @@ def compute_content_hash(payload: dict[str, Any]) -> str:
 
 
 def build_stage_artifact_id(artifact_kind: str, logical_name: str, created_at: dt.datetime, content_hash: str) -> str:
-    ts = created_at.strftime("%Y%m%dT%H%M%SZ")
-    return f"{artifact_kind}.{logical_name}.{ts}.{content_hash[:8]}"
+    _ = created_at
+    return f"{artifact_kind}.{logical_name}.{content_hash[:12]}"
 
 
 def build_artifact_id(dataset_name: str, created_at: dt.datetime, content_hash: str) -> str:
@@ -56,8 +69,8 @@ def build_artifact_id(dataset_name: str, created_at: dt.datetime, content_hash: 
 
 
 def build_stage_manifest_id(artifact_kind: str, logical_name: str, created_at: dt.datetime, content_hash: str) -> str:
-    ts = created_at.strftime("%Y%m%dT%H%M%SZ")
-    return f"manifest.{artifact_kind}.{logical_name}.{ts}.{content_hash[:8]}"
+    _ = created_at
+    return f"manifest.{artifact_kind}.{logical_name}.{content_hash[:12]}"
 
 
 def build_manifest_id(dataset_name: str, created_at: dt.datetime, content_hash: str) -> str:

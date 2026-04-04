@@ -1,31 +1,42 @@
-"""Dataset assembly — builds model-ready datasets from bars + features + labels."""
+"""Dataset assembly utilities and legacy compiler compatibility."""
 
 from __future__ import annotations
 
 import datetime as dt
+from importlib import import_module
 import shutil
+import tempfile
+from pathlib import Path
 from typing import Any
 
 import polars as pl
 
 from mt5pipe.config.models import DatasetConfig
 from mt5pipe.features.context import add_lagged_bar_features
-from mt5pipe.features.quality import add_spread_quality_features
-from mt5pipe.features.session import add_session_features
-from mt5pipe.features.time import add_time_features
 from mt5pipe.features.labels import (
     add_direction_labels,
     add_future_returns,
     add_triple_barrier_labels,
 )
+from mt5pipe.features.quality import add_spread_quality_features
+from mt5pipe.features.session import add_session_features
+from mt5pipe.features.time import add_time_features
 from mt5pipe.quality.cleaning import clean_dataset, validate_bars
 from mt5pipe.quality.gaps import detect_gaps, fill_bar_gaps
-from mt5pipe.quality.report import dataset_quality_report, format_quality_report
 from mt5pipe.storage.parquet_store import ParquetStore
 from mt5pipe.storage.paths import StoragePaths
 from mt5pipe.utils.logging import get_logger
 
 log = get_logger(__name__)
+
+_MISSING = object()
+_COMPILER_COMPAT_BASE_TIMEFRAME = "M1"
+_COMPILER_COMPAT_CONTEXT_TIMEFRAMES = ["M5", "M15", "H1", "H4", "D1"]
+_COMPILER_COMPAT_HORIZONS = [5, 15, 60, 240]
+_COMPILER_COMPAT_FEATURE_SELECTORS = ["time/*", "session/*", "quality/*", "htf_context/*"]
+_COMPILER_COMPAT_LABEL_PACK_REF = "core_tb_volscaled@1.0.0"
+_COMPILER_COMPAT_STATE_VERSION_REF = "state.default@1.0.0"
+_COMPILER_COMPAT_TRUTH_POLICY_REF = "truth.default@1.0.0"
 
 
 def build_dataset(
@@ -38,23 +49,45 @@ def build_dataset(
     dataset_name: str = "default",
 ) -> pl.DataFrame:
     """Build a complete model-ready dataset.
-    
-    1. Load base timeframe bars (M1)
-    2. Validate & clean bars (OHLC integrity, remove invalids)
-    3. Detect & fill gaps (weekend-aware, forward-fill small gaps)
-    4. Add time/session features
-    5. Add spread/quality features
-    6. Join higher-TF context (last *closed* bar only — shifted by bar duration)
-    7. Add labels
-    8. Filter out synthetic / filled rows (not trainable)
-    9. Final dataset cleaning (drop high-null cols, replace inf, drop constant cols)
-    10. Quality report
-    11. Split into train/val/test
-    12. Write to disk
+
+    When the legacy request maps cleanly to the compiler-era DatasetSpec contract,
+    route through the compiler service and mirror the resulting split files back into
+    the legacy dataset location. Otherwise, keep the original legacy implementation.
     """
+    compatibility_reason = _compiler_compatibility_reason(cfg)
+    if compatibility_reason is None:
+        try:
+            compiled = _build_dataset_via_compiler_compat(
+                symbol=symbol,
+                start_date=start_date,
+                end_date=end_date,
+                paths=paths,
+                store=store,
+                cfg=cfg,
+                dataset_name=dataset_name,
+            )
+            if compiled is not None:
+                return compiled
+        except Exception as exc:
+            log.warning("dataset_compiler_compat_failed", dataset=dataset_name, error=str(exc))
+    else:
+        log.info("dataset_compiler_compat_unavailable", dataset=dataset_name, reason=compatibility_reason)
+
+    return _build_dataset_legacy(symbol, start_date, end_date, paths, store, cfg, dataset_name)
+
+
+def _build_dataset_legacy(
+    symbol: str,
+    start_date: dt.date,
+    end_date: dt.date,
+    paths: StoragePaths,
+    store: ParquetStore,
+    cfg: DatasetConfig,
+    dataset_name: str = "default",
+) -> pl.DataFrame:
+    """Original dataset builder implementation."""
     from mt5pipe.bars.builder import timeframe_to_seconds
 
-    # 1. Load base bars
     base_tf = cfg.base_timeframe
     base_bars = _load_bars_range(symbol, base_tf, start_date, end_date, paths, store)
 
@@ -64,11 +97,9 @@ def build_dataset(
 
     log.info("dataset_base_loaded", symbol=symbol, rows=len(base_bars))
 
-    # 2. Validate bar integrity
     base_bars = validate_bars(base_bars)
     log.info("dataset_bars_validated", rows=len(base_bars))
 
-    # 3. Detect & fill gaps
     tf_secs = timeframe_to_seconds(base_tf)
     gap_report = detect_gaps(base_bars, base_tf, tf_secs)
     if gap_report.missing_bars > 0:
@@ -79,52 +110,45 @@ def build_dataset(
         )
         base_bars = fill_bar_gaps(base_bars, base_tf, tf_secs)
         log.info("dataset_gaps_filled", rows=len(base_bars))
-    else:
-        if "_filled" not in base_bars.columns:
-            base_bars = base_bars.with_columns(pl.lit(False).alias("_filled"))
+    elif "_filled" not in base_bars.columns:
+        base_bars = base_bars.with_columns(pl.lit(False).alias("_filled"))
 
-    # 4. Time features
     base_bars = add_time_features(base_bars)
-
-    # 5. Session features
     base_bars = add_session_features(base_bars)
-
-    # 6. Spread/quality features
     base_bars = add_spread_quality_features(base_bars)
 
-    # 7. Higher-TF context (shifted by bar duration — prevents look-ahead)
     for htf in cfg.context_timeframes:
         htf_bars = _load_bars_range(symbol, htf, start_date, end_date, paths, store)
-        if not htf_bars.is_empty():
-            htf_bars = validate_bars(htf_bars)
-            htf_secs = timeframe_to_seconds(htf)
-            base_bars = add_lagged_bar_features(
-                base_bars, htf_bars, htf, bar_duration_seconds=htf_secs,
-            )
-            log.info("dataset_htf_joined", htf=htf, bar_dur_s=htf_secs, cols_added=True)
+        if htf_bars.is_empty():
+            continue
+        htf_bars = validate_bars(htf_bars)
+        htf_secs = timeframe_to_seconds(htf)
+        base_bars = add_lagged_bar_features(
+            base_bars,
+            htf_bars,
+            htf,
+            bar_duration_seconds=htf_secs,
+        )
+        log.info("dataset_htf_joined", htf=htf, bar_dur_s=htf_secs, cols_added=True)
 
-    # 8. Labels
     base_bars = add_future_returns(base_bars, cfg.horizons_minutes)
     base_bars = add_direction_labels(base_bars, cfg.horizons_minutes)
     base_bars = add_triple_barrier_labels(
-        base_bars, cfg.horizons_minutes,
+        base_bars,
+        cfg.horizons_minutes,
         tp_bps=cfg.triple_barrier_tp_bps,
         sl_bps=cfg.triple_barrier_sl_bps,
         vol_scale_window=cfg.triple_barrier_vol_lookback,
         vol_multiplier=cfg.triple_barrier_vol_multiplier,
     )
 
-    # Drop rows with null labels (end of dataset where forward returns unavailable)
-    # Use purge zone: remove max_horizon rows from the end to avoid label leakage
     max_horizon = max(cfg.horizons_minutes)
-    purge_rows = max_horizon + 1  # +1 safety margin for edge effects
-    if len(base_bars) > purge_rows:
-        base_bars = base_bars.head(len(base_bars) - purge_rows)
-    else:
+    purge_rows = max_horizon + 1
+    if len(base_bars) <= purge_rows:
         log.warning("dataset_too_short_for_labels", rows=len(base_bars), purge_needed=purge_rows)
         return pl.DataFrame()
+    base_bars = base_bars.head(len(base_bars) - purge_rows)
 
-    # 8b. Filter out synthetic / filled rows (not trainable for ML)
     pre_filter = len(base_bars)
     if "_filled" in base_bars.columns:
         base_bars = base_bars.filter(~pl.col("_filled"))
@@ -132,22 +156,10 @@ def build_dataset(
         base_bars = base_bars.filter(pl.col("source_count") > 0)
     filtered_out = pre_filter - len(base_bars)
     if filtered_out > 0:
-        log.info(
-            "dataset_filled_rows_removed",
-            removed=filtered_out,
-            remaining=len(base_bars),
-        )
+        log.info("dataset_filled_rows_removed", removed=filtered_out, remaining=len(base_bars))
 
-    # 9. Final dataset-level cleaning
-    base_bars, clean_stats = clean_dataset(base_bars)
+    base_bars, _clean_stats = clean_dataset(base_bars)
 
-    # 10. Quality report
-    qr = dataset_quality_report(base_bars)
-    log.info("dataset_built", symbol=symbol, rows=len(base_bars),
-             cols=len(base_bars.columns), quality_score=qr.get("quality_score", 0))
-
-    # 11. Split with embargo zones to prevent data leakage
-    # Embargo = max label horizon bars between splits (hedge fund standard)
     embargo = max(cfg.horizons_minutes)
     n = len(base_bars)
     train_end = int(n * cfg.train_ratio)
@@ -167,25 +179,160 @@ def build_dataset(
         embargo_rows=embargo,
     )
 
-    # Ensure split outputs are clean for this build so old runs cannot leak across splits.
     for split_name in ("train", "val", "test"):
         split_dir = paths.dataset_dir(dataset_name, split_name)
         if split_dir.exists():
             shutil.rmtree(split_dir)
 
-    # Write splits
     for split_name, split_df in [("train", train_df), ("val", val_df), ("test", test_df)]:
-        if not split_df.is_empty():
-            path = paths.dataset_file(dataset_name, split_name)
-            store.write(split_df, path)
-            log.info(
-                "dataset_split_written",
-                split=split_name,
-                rows=len(split_df),
-                path=str(path),
-            )
+        if split_df.is_empty():
+            continue
+        path = paths.dataset_file(dataset_name, split_name)
+        store.write(split_df, path)
+        log.info("dataset_split_written", split=split_name, rows=len(split_df), path=str(path))
 
     return base_bars
+
+
+def _resolve_attr(value: Any, path: str, default: Any = _MISSING) -> Any:
+    current = value
+    for part in path.split("."):
+        if current is None:
+            return default
+        if isinstance(current, dict):
+            if part not in current:
+                return default
+            current = current[part]
+            continue
+        if not hasattr(current, part):
+            return default
+        current = getattr(current, part)
+    return current
+
+
+def _first_present(value: Any, *paths: str, default: Any = None) -> Any:
+    for path in paths:
+        resolved = _resolve_attr(value, path, _MISSING)
+        if resolved is not _MISSING:
+            return resolved
+    return default
+
+
+def _compiler_compatibility_reason(cfg: DatasetConfig) -> str | None:
+    if cfg.base_timeframe != _COMPILER_COMPAT_BASE_TIMEFRAME:
+        return f"base_timeframe must be {_COMPILER_COMPAT_BASE_TIMEFRAME}"
+    if list(cfg.context_timeframes) != _COMPILER_COMPAT_CONTEXT_TIMEFRAMES:
+        return f"context_timeframes must be {_COMPILER_COMPAT_CONTEXT_TIMEFRAMES}"
+    if list(cfg.horizons_minutes) != _COMPILER_COMPAT_HORIZONS:
+        return f"horizons_minutes must be {_COMPILER_COMPAT_HORIZONS}"
+    if cfg.triple_barrier_tp_bps != 50.0 or cfg.triple_barrier_sl_bps != 50.0:
+        return "triple barrier bps settings must match the stable compiler label pack"
+    if cfg.triple_barrier_vol_lookback != 60 or cfg.triple_barrier_vol_multiplier != 2.0:
+        return "vol-scaled triple barrier settings must match the stable compiler label pack"
+    return None
+
+
+def _build_dataset_via_compiler_compat(
+    *,
+    symbol: str,
+    start_date: dt.date,
+    end_date: dt.date,
+    paths: StoragePaths,
+    store: ParquetStore,
+    cfg: DatasetConfig,
+    dataset_name: str,
+) -> pl.DataFrame | None:
+    try:
+        service = import_module("mt5pipe.compiler.service")
+    except ModuleNotFoundError:
+        return None
+    compile_fn = getattr(service, "compile_dataset_spec", None)
+    if not callable(compile_fn):
+        return None
+
+    with tempfile.TemporaryDirectory(prefix="mt5pipe_dataset_compat_") as tmp_dir:
+        spec_path = Path(tmp_dir) / "dataset_spec.yaml"
+        _write_compiler_compat_spec(spec_path, symbol, start_date, end_date, cfg, dataset_name)
+        result = compile_fn(spec_path, publish=False)
+
+    artifact_id = str(_first_present(result, "artifact_id", "manifest.artifact_id", default=""))
+    logical_name = str(
+        _first_present(result, "manifest.logical_name", "logical_name", "spec.dataset_name", default=dataset_name)
+    )
+    if not artifact_id:
+        raise ValueError("compiler compatibility build did not return an artifact_id")
+
+    split_frames: list[pl.DataFrame] = []
+    for split_name in ("train", "val", "test"):
+        legacy_dir = paths.dataset_dir(logical_name, split_name)
+        if legacy_dir.exists():
+            shutil.rmtree(legacy_dir)
+
+        artifact_dir = paths.compiler_dataset_dir(logical_name, artifact_id, split_name)
+        split_df = store.read_dir(artifact_dir)
+        if split_df.is_empty():
+            continue
+
+        store.write(split_df, paths.dataset_file(logical_name, split_name))
+        split_frames.append(split_df)
+
+    if not split_frames:
+        raise FileNotFoundError(
+            f"compiler compatibility build produced no split data for dataset={logical_name} artifact_id={artifact_id}"
+        )
+
+    dataset_df = pl.concat(split_frames, how="diagonal_relaxed")
+    if "time_utc" in dataset_df.columns:
+        dataset_df = dataset_df.sort("time_utc")
+
+    log.info(
+        "dataset_compiler_compat_succeeded",
+        dataset=logical_name,
+        artifact_id=artifact_id,
+        rows=len(dataset_df),
+    )
+    return dataset_df
+
+
+def _write_compiler_compat_spec(
+    path: Path,
+    symbol: str,
+    start_date: dt.date,
+    end_date: dt.date,
+    cfg: DatasetConfig,
+    dataset_name: str,
+) -> None:
+    version = f"legacy-compat-{start_date.strftime('%Y%m%d')}-{end_date.strftime('%Y%m%d')}"
+    lines = [
+        'schema_version: "1.0.0"',
+        f'dataset_name: "{dataset_name}"',
+        f'version: "{version}"',
+        f'description: "Legacy dataset build compatibility spec for {dataset_name}"',
+        "symbols:",
+        f'  - "{symbol}"',
+        f'date_from: "{start_date.isoformat()}"',
+        f'date_to: "{end_date.isoformat()}"',
+        f'base_clock: "{cfg.base_timeframe}"',
+        f'state_version_ref: "{_COMPILER_COMPAT_STATE_VERSION_REF}"',
+        "feature_selectors:",
+    ]
+    lines.extend(f'  - "{selector}"' for selector in _COMPILER_COMPAT_FEATURE_SELECTORS)
+    lines.extend([
+        f'label_pack_ref: "{_COMPILER_COMPAT_LABEL_PACK_REF}"',
+        "filters:",
+        '  - "exclude:filled_rows"',
+        'split_policy: "temporal_holdout"',
+        f"train_ratio: {cfg.train_ratio:.2f}",
+        f"val_ratio: {cfg.val_ratio:.2f}",
+        f"test_ratio: {cfg.test_ratio:.2f}",
+        f"embargo_rows: {max(cfg.horizons_minutes)}",
+        f'truth_policy_ref: "{_COMPILER_COMPAT_TRUTH_POLICY_REF}"',
+        "publish_on_accept: false",
+        "tags:",
+        '  - "legacy-compat"',
+        '  - "cli-build"',
+    ])
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _load_bars_range(
@@ -220,12 +367,7 @@ def walk_forward_splits(
     gap_pct: float = 0.02,
     embargo_rows: int = 240,
 ) -> list[tuple[pl.DataFrame, pl.DataFrame]]:
-    """Generate walk-forward train/test splits for time-series cross-validation.
-    
-    Returns list of (train, test) DataFrames.
-    No data leakage: train always precedes test with an embargo gap.
-    Embargo default = 240 rows (4 hours at M1 frequency).
-    """
+    """Generate walk-forward train/test splits for time-series cross-validation."""
     n = len(df)
     splits: list[tuple[pl.DataFrame, pl.DataFrame]] = []
     step = int(n * (1.0 - train_pct) / n_splits)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 from pathlib import Path
 
 
@@ -11,6 +12,16 @@ class StoragePaths:
 
     def __init__(self, root: Path) -> None:
         self.root = root
+
+    @staticmethod
+    def _compact_name(value: str, *, prefix_len: int = 24) -> str:
+        """Keep manifest-oriented path segments short and deterministic on Windows."""
+        digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+        safe_prefix = "".join(ch if ch.isalnum() or ch in {".", "_", "-"} else "_" for ch in value)
+        safe_prefix = safe_prefix[:prefix_len].rstrip("._-")
+        if not safe_prefix:
+            safe_prefix = "artifact"
+        return f"{safe_prefix}-{digest}"
 
     # --- Raw ticks ---
     def raw_ticks_dir(self, broker_id: str, symbol: str, date: dt.date) -> Path:
@@ -183,10 +194,12 @@ class StoragePaths:
 
     # --- Compiler manifests ---
     def manifest_dir(self, artifact_kind: str, logical_name: str) -> Path:
-        return self.root / "manifests" / f"kind={artifact_kind}" / f"name={logical_name}"
+        short_name = self._compact_name(logical_name)
+        return self.root / "manifests" / f"kind={artifact_kind}" / f"name={short_name}"
 
     def manifest_file(self, artifact_kind: str, logical_name: str, manifest_id: str) -> Path:
-        return self.manifest_dir(artifact_kind, logical_name) / f"{manifest_id}.json"
+        short_manifest_id = self._compact_name(manifest_id, prefix_len=18)
+        return self.manifest_dir(artifact_kind, logical_name) / f"{short_manifest_id}.json"
 
     # --- Truth reports ---
     def truth_report_dir(self, artifact_id: str) -> Path:

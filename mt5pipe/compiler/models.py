@@ -8,6 +8,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 
+ArtifactStatus = Literal["building", "truth_pending", "accepted", "rejected", "published", "superseded"]
+
+
 class DatasetSpec(BaseModel):
     """Compiler input spec for a dataset artifact."""
 
@@ -69,7 +72,7 @@ class LineageManifest(BaseModel):
     content_hash: str
     build_id: str
     created_at: dt.datetime
-    status: Literal["building", "accepted", "rejected", "published", "superseded"]
+    status: ArtifactStatus
     dataset_spec_ref: str | None = None
     state_artifact_refs: list[str] = Field(default_factory=list)
     feature_spec_refs: list[str] = Field(default_factory=list)

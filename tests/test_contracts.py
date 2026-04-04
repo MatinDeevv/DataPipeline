@@ -122,6 +122,24 @@ def test_lineage_manifest_requires_inputs() -> None:
         )
 
 
+def test_lineage_manifest_accepts_truth_pending_status() -> None:
+    manifest = LineageManifest(
+        manifest_id="manifest.truth_pending.1",
+        artifact_id="artifact.truth_pending.1",
+        artifact_kind="dataset",
+        logical_name="xau_core",
+        logical_version="1.0.0",
+        artifact_uri="data/datasets/x",
+        content_hash="abc123",
+        build_id="build.1",
+        created_at=dt.datetime.now(UTC),
+        status="truth_pending",
+        code_version="workspace-local-no-git",
+        input_partition_refs=["data/bars/symbol=XAUUSD/timeframe=M1/date=2026-04-01"],
+    )
+    assert manifest.status == "truth_pending"
+
+
 def test_trust_report_rejects_publishable_hard_failures() -> None:
     with pytest.raises(ValueError):
         TrustReport(

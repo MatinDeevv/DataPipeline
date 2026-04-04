@@ -1,7 +1,7 @@
 schema_version: "1.0.0"
 dataset_name: "xau_m1_core"
 version: "1.0.0"
-description: "Phase 1 compiler-backed XAUUSD M1 core dataset"
+description: "Compiler-backed XAUUSD M1 core dataset with stable core features and labels"
 symbols:
   - "XAUUSD"
 date_from: "2026-04-01"
@@ -12,6 +12,7 @@ feature_selectors:
   - "time/*"
   - "session/*"
   - "quality/*"
+  - "htf_context/*"
 label_pack_ref: "core_tb_volscaled@1.0.0"
 filters:
   - "exclude:filled_rows"
@@ -23,5 +24,6 @@ embargo_rows: 240
 truth_policy_ref: "truth.default@1.0.0"
 publish_on_accept: true
 tags:
-  - "phase1"
+  - "phase2"
   - "xau"
+  - "core"

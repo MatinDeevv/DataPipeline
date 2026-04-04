@@ -7,7 +7,13 @@ import json
 import sqlite3
 from pathlib import Path
 
-from mt5pipe.catalog.models import ArtifactRecord, BuildRunRecord
+from mt5pipe.catalog.models import (
+    AliasRecord,
+    ArtifactInputRecord,
+    ArtifactRecord,
+    ArtifactStatusEventRecord,
+    BuildRunRecord,
+)
 from mt5pipe.compiler.models import DatasetSpec, LineageManifest
 from mt5pipe.features.registry.models import FeatureSpec
 from mt5pipe.labels.registry.models import LabelPack
@@ -124,6 +130,16 @@ CREATE TABLE IF NOT EXISTS artifact_aliases (
 )
 """
 
+_CREATE_ARTIFACT_STATUS_EVENTS_SQL = """
+CREATE TABLE IF NOT EXISTS artifact_status_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    artifact_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT ''
+)
+"""
+
 
 class CatalogDB:
     """SQLite-backed metadata catalog for dataset compiler artifacts."""
@@ -148,6 +164,7 @@ class CatalogDB:
             self._conn.execute(_CREATE_TRUST_REPORTS_SQL)
             self._conn.execute(_CREATE_QA_RESULTS_SQL)
             self._conn.execute(_CREATE_ARTIFACT_ALIASES_SQL)
+            self._conn.execute(_CREATE_ARTIFACT_STATUS_EVENTS_SQL)
 
     def close(self) -> None:
         self._conn.close()
@@ -198,27 +215,56 @@ class CatalogDB:
             self._conn.execute(
                 """INSERT OR REPLACE INTO build_runs
                    (build_id, dataset_spec_key, status, code_version, started_at)
-                   VALUES (?, ?, 'running', ?, ?)""",
+                   VALUES (?, ?, 'building', ?, ?)""",
                 (build_id, dataset_spec_key, code_version, started_at.isoformat()),
             )
         return BuildRunRecord(
             build_id=build_id,
             dataset_spec_key=dataset_spec_key,
-            status="running",
+            status="building",
             code_version=code_version,
             started_at=started_at,
         )
 
-    def finish_build(self, build_id: str, status: str, artifact_id: str | None = None, error_message: str = "") -> None:
+    def update_build_status(
+        self,
+        build_id: str,
+        status: str,
+        *,
+        artifact_id: str | None = None,
+        error_message: str | None = None,
+        finished: bool = False,
+    ) -> None:
+        sets = ["status=?"]
+        params: list[object] = [status]
+        if artifact_id is not None:
+            sets.append("artifact_id=?")
+            params.append(artifact_id)
+        if error_message is not None:
+            sets.append("error_message=?")
+            params.append(error_message)
+        if finished:
+            sets.append("finished_at=?")
+            params.append(utc_now().isoformat())
+        params.append(build_id)
+
         with self._conn:
             self._conn.execute(
-                """UPDATE build_runs
-                   SET status=?, finished_at=?, error_message=?, artifact_id=?
-                   WHERE build_id=?""",
-                (status, utc_now().isoformat(), error_message, artifact_id, build_id),
+                f"UPDATE build_runs SET {', '.join(sets)} WHERE build_id=?",
+                tuple(params),
             )
 
-    def register_artifact(self, manifest: LineageManifest, manifest_uri: str) -> None:
+    def finish_build(self, build_id: str, status: str, artifact_id: str | None = None, error_message: str = "") -> None:
+        self.update_build_status(
+            build_id,
+            status,
+            artifact_id=artifact_id,
+            error_message=error_message,
+            finished=True,
+        )
+
+    def register_artifact(self, manifest: LineageManifest, manifest_uri: str, *, detail: str = "") -> None:
+        existing = self.get_artifact(manifest.artifact_id)
         with self._conn:
             self._conn.execute(
                 """INSERT OR REPLACE INTO artifacts
@@ -257,6 +303,12 @@ class CatalogDB:
                        VALUES (?, 'feature_spec', ?, 'feature', ?)""",
                     (manifest.artifact_id, input_ref, ordinal),
                 )
+            if manifest.dataset_spec_ref:
+                self._conn.execute(
+                    """INSERT INTO artifact_inputs (artifact_id, input_kind, input_ref, role, ordinal)
+                       VALUES (?, 'dataset_spec', ?, 'spec', 0)""",
+                    (manifest.artifact_id, manifest.dataset_spec_ref),
+                )
             if manifest.label_pack_ref:
                 self._conn.execute(
                     """INSERT INTO artifact_inputs (artifact_id, input_kind, input_ref, role, ordinal)
@@ -268,6 +320,18 @@ class CatalogDB:
                     """INSERT INTO artifact_inputs (artifact_id, input_kind, input_ref, role, ordinal)
                        VALUES (?, 'artifact', ?, 'parent', ?)""",
                     (manifest.artifact_id, input_ref, ordinal),
+                )
+            if manifest.merge_config_ref:
+                self._conn.execute(
+                    """INSERT INTO artifact_inputs (artifact_id, input_kind, input_ref, role, ordinal)
+                       VALUES (?, 'merge_config', ?, 'merge_config', 0)""",
+                    (manifest.artifact_id, manifest.merge_config_ref),
+                )
+            if existing is None or existing.status != manifest.status:
+                self._conn.execute(
+                    """INSERT INTO artifact_status_events (artifact_id, status, created_at, detail)
+                       VALUES (?, ?, ?, ?)""",
+                    (manifest.artifact_id, manifest.status, utc_now().isoformat(), detail),
                 )
 
     def register_trust_report(self, report: TrustReport) -> None:
@@ -311,22 +375,59 @@ class CatalogDB:
                 (alias_key, artifact_id, alias_type, utc_now().isoformat()),
             )
 
+    def get_build_run(self, build_id: str) -> BuildRunRecord | None:
+        row = self._conn.execute("SELECT * FROM build_runs WHERE build_id=?", (build_id,)).fetchone()
+        if row is None:
+            return None
+        return BuildRunRecord(
+            build_id=row["build_id"],
+            dataset_spec_key=row["dataset_spec_key"],
+            status=row["status"],
+            code_version=row["code_version"],
+            started_at=dt.datetime.fromisoformat(row["started_at"]),
+            finished_at=dt.datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
+            error_message=row["error_message"] or "",
+            artifact_id=row["artifact_id"],
+        )
+
+    def get_dataset_spec(self, dataset_spec_key: str) -> DatasetSpec | None:
+        row = self._conn.execute(
+            "SELECT spec_json FROM dataset_specs WHERE dataset_spec_key=?",
+            (dataset_spec_key,),
+        ).fetchone()
+        if row is None:
+            return None
+        return DatasetSpec.model_validate_json(row["spec_json"])
+
+    def get_feature_spec(self, feature_key: str) -> FeatureSpec | None:
+        row = self._conn.execute(
+            "SELECT spec_json FROM feature_specs WHERE feature_key=?",
+            (feature_key,),
+        ).fetchone()
+        if row is None:
+            return None
+        return FeatureSpec.model_validate_json(row["spec_json"])
+
+    def get_label_pack(self, label_pack_key: str) -> LabelPack | None:
+        row = self._conn.execute(
+            "SELECT spec_json FROM label_packs WHERE label_pack_key=?",
+            (label_pack_key,),
+        ).fetchone()
+        if row is None:
+            return None
+        return LabelPack.model_validate_json(row["spec_json"])
+
+    def get_trust_report(self, artifact_id: str) -> TrustReport | None:
+        raw = self.get_trust_report_json(artifact_id)
+        if raw is None:
+            return None
+        return TrustReport.model_validate_json(raw)
+
     def get_artifact(self, artifact_id: str) -> ArtifactRecord | None:
         row = self._conn.execute("SELECT * FROM artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()
         if row is None:
             return None
-        return ArtifactRecord(
-            artifact_id=row["artifact_id"],
-            artifact_kind=row["artifact_kind"],
-            logical_name=row["logical_name"],
-            logical_version=row["logical_version"],
-            artifact_uri=row["artifact_uri"],
-            manifest_uri=row["manifest_uri"],
-            content_hash=row["content_hash"],
-            status=row["status"],
-            build_id=row["build_id"],
-            created_at=dt.datetime.fromisoformat(row["created_at"]),
-        )
+        return self._artifact_record_from_row(row)
 
     def resolve_artifact(self, ref: str) -> ArtifactRecord | None:
         direct = self.get_artifact(ref)
@@ -353,9 +454,83 @@ class CatalogDB:
                 return self.get_artifact(row["artifact_id"])
         return None
 
+    def list_artifact_inputs(self, artifact_id: str) -> list[ArtifactInputRecord]:
+        rows = self._conn.execute(
+            """SELECT artifact_id, input_kind, input_ref, role, ordinal
+               FROM artifact_inputs
+               WHERE artifact_id=?
+               ORDER BY ordinal ASC, input_kind ASC, input_ref ASC""",
+            (artifact_id,),
+        ).fetchall()
+        return [
+            ArtifactInputRecord(
+                artifact_id=row["artifact_id"],
+                input_kind=row["input_kind"],
+                input_ref=row["input_ref"],
+                role=row["role"],
+                ordinal=int(row["ordinal"]),
+            )
+            for row in rows
+        ]
+
+    def list_aliases(self, artifact_id: str | None = None) -> list[AliasRecord]:
+        if artifact_id is None:
+            rows = self._conn.execute(
+                "SELECT alias_key, artifact_id, alias_type, created_at FROM artifact_aliases ORDER BY alias_key ASC"
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                """SELECT alias_key, artifact_id, alias_type, created_at
+                   FROM artifact_aliases WHERE artifact_id=? ORDER BY alias_key ASC""",
+                (artifact_id,),
+            ).fetchall()
+        return [
+            AliasRecord(
+                alias_key=row["alias_key"],
+                artifact_id=row["artifact_id"],
+                alias_type=row["alias_type"],
+                created_at=dt.datetime.fromisoformat(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+    def get_artifact_status_history(self, artifact_id: str) -> list[ArtifactStatusEventRecord]:
+        rows = self._conn.execute(
+            """SELECT event_id, artifact_id, status, created_at, detail
+               FROM artifact_status_events
+               WHERE artifact_id=?
+               ORDER BY event_id ASC""",
+            (artifact_id,),
+        ).fetchall()
+        return [
+            ArtifactStatusEventRecord(
+                event_id=int(row["event_id"]),
+                artifact_id=row["artifact_id"],
+                status=row["status"],
+                created_at=dt.datetime.fromisoformat(row["created_at"]),
+                detail=row["detail"] or "",
+            )
+            for row in rows
+        ]
+
     def get_trust_report_json(self, artifact_id: str) -> str | None:
         row = self._conn.execute(
             "SELECT report_json FROM trust_reports WHERE artifact_id=? ORDER BY created_at DESC LIMIT 1",
             (artifact_id,),
         ).fetchone()
         return row["report_json"] if row is not None else None
+
+    @staticmethod
+    def _artifact_record_from_row(row: sqlite3.Row) -> ArtifactRecord:
+        return ArtifactRecord(
+            artifact_id=row["artifact_id"],
+            artifact_kind=row["artifact_kind"],
+            logical_name=row["logical_name"],
+            logical_version=row["logical_version"],
+            artifact_uri=row["artifact_uri"],
+            manifest_uri=row["manifest_uri"],
+            content_hash=row["content_hash"],
+            status=row["status"],
+            build_id=row["build_id"],
+            created_at=dt.datetime.fromisoformat(row["created_at"]),
+        )
