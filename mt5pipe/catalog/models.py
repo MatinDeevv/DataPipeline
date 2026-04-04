@@ -5,6 +5,8 @@ from __future__ import annotations
 import datetime as dt
 from typing import Literal
 
+from mt5pipe.compiler.models import ArtifactStatus
+
 from pydantic import BaseModel
 
 
@@ -27,6 +29,29 @@ class ArtifactRecord(BaseModel):
     artifact_uri: str
     manifest_uri: str
     content_hash: str
-    status: str
+    status: ArtifactStatus
     build_id: str
     created_at: dt.datetime
+
+
+class ArtifactInputRecord(BaseModel):
+    artifact_id: str
+    input_kind: str
+    input_ref: str
+    role: str
+    ordinal: int = 0
+
+
+class AliasRecord(BaseModel):
+    alias_key: str
+    artifact_id: str
+    alias_type: str
+    created_at: dt.datetime
+
+
+class ArtifactStatusEventRecord(BaseModel):
+    event_id: int
+    artifact_id: str
+    status: ArtifactStatus
+    created_at: dt.datetime
+    detail: str = ""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from pathlib import Path
 
 import polars as pl
 
@@ -33,6 +34,8 @@ class TruthService:
         manifest: LineageManifest,
         paths: StoragePaths,
         store: ParquetStore,
+        expected_content_hash: str | None = None,
+        manifest_path: Path | None = None,
     ) -> TrustReport:
         quality = dataset_quality_report(dataset_df)
         checks: list[QaCheckResult] = []
@@ -48,14 +51,20 @@ class TruthService:
                 hard_failures.append(f"empty_split:{split_name}")
         checks.append(QaCheckResult(
             check_name="coverage",
-            status="failed" if dataset_df.is_empty() else "passed",
+            status="failed" if dataset_df.is_empty() or any(frame.is_empty() for frame in split_frames.values()) else "passed",
             score=coverage_score,
             metrics={"rows": len(dataset_df), "split_rows": {k: len(v) for k, v in split_frames.items()}},
             thresholds={"min_rows": 1, "min_coverage_score": self.MIN_COVERAGE_SCORE},
-            failure_reason="dataset artifact has no rows" if dataset_df.is_empty() else "",
+            failure_reason=(
+                "dataset artifact has no rows"
+                if dataset_df.is_empty()
+                else "one or more required splits is empty"
+                if any(frame.is_empty() for frame in split_frames.values())
+                else ""
+            ),
         ))
 
-        duplicate_rows = int(quality.get("duplicate_timestamps", 0))
+        duplicate_rows = self._duplicate_primary_clock_rows(dataset_df)
         leakage_failed = duplicate_rows > 0 or any(not feature.point_in_time_safe for feature in feature_specs)
         if leakage_failed:
             hard_failures.append("leakage_or_duplicate_timestamp_failure")
@@ -65,11 +74,11 @@ class TruthService:
             status="failed" if leakage_failed else "passed",
             score=leakage_score,
             metrics={
-                "duplicate_timestamps": duplicate_rows,
+                "duplicate_primary_clock_rows": duplicate_rows,
                 "all_features_pit_safe": all(fs.point_in_time_safe for fs in feature_specs),
             },
-            thresholds={"duplicate_timestamps": 0, "all_features_pit_safe": True},
-            failure_reason="duplicate timestamps or non-PIT feature detected" if leakage_failed else "",
+            thresholds={"duplicate_primary_clock_rows": 0, "all_features_pit_safe": True},
+            failure_reason="duplicate primary clock rows or non-PIT feature detected" if leakage_failed else "",
         ))
 
         null_columns = quality.get("null_columns", {})
@@ -106,21 +115,37 @@ class TruthService:
 
         label_cols = [col for col in label_pack.output_columns if col in dataset_df.columns]
         missing_label_columns = [col for col in label_pack.output_columns if col not in dataset_df.columns]
+        all_null_label_columns = [
+            col for col in label_cols
+            if int(dataset_df[col].null_count()) == len(dataset_df)
+        ]
         label_nulls = sum(int(dataset_df[col].null_count()) for col in label_cols)
-        label_quality_score = 100.0 if not missing_label_columns and label_nulls == 0 else 80.0 if label_cols else 0.0
-        if missing_label_columns:
+        label_quality_score = (
+            100.0
+            if not missing_label_columns and not all_null_label_columns and label_nulls == 0
+            else 80.0 if label_cols and not missing_label_columns and not all_null_label_columns
+            else 0.0
+        )
+        if missing_label_columns or all_null_label_columns:
             hard_failures.append("label_columns_missing")
         checks.append(QaCheckResult(
             check_name="label_quality",
-            status="failed" if missing_label_columns else "warning" if label_nulls > 0 else "passed",
+            status="failed" if missing_label_columns or all_null_label_columns else "warning" if label_nulls > 0 else "passed",
             score=label_quality_score,
             metrics={
                 "label_columns_present": len(label_cols),
                 "label_nulls": label_nulls,
                 "missing_label_columns": missing_label_columns,
+                "all_null_label_columns": all_null_label_columns,
             },
             thresholds={"expected_label_columns": len(label_pack.output_columns), "label_nulls": 0},
-            failure_reason="not all label columns were materialized" if missing_label_columns else "",
+            failure_reason=(
+                "not all label columns were materialized"
+                if missing_label_columns
+                else "one or more label columns is entirely null"
+                if all_null_label_columns
+                else ""
+            ),
         ))
 
         source_quality_score = self._source_quality_score(spec.symbols[0], spec.date_from, spec.date_to, paths, store)
@@ -165,6 +190,22 @@ class TruthService:
             failure_reason="lineage manifest is incomplete" if not lineage_complete else "",
         ))
 
+        manifest_hash_matches = expected_content_hash is None or manifest.content_hash == expected_content_hash
+        if not manifest_hash_matches:
+            hard_failures.append("manifest_hash_mismatch")
+        checks.append(QaCheckResult(
+            check_name="manifest_integrity",
+            status="failed" if not manifest_hash_matches else "passed",
+            score=100.0 if manifest_hash_matches else 0.0,
+            metrics={
+                "manifest_content_hash": manifest.content_hash,
+                "expected_content_hash": expected_content_hash or manifest.content_hash,
+                "manifest_path": str(manifest_path) if manifest_path is not None else "",
+            },
+            thresholds={"manifest_content_hash_matches": True},
+            failure_reason="manifest content hash does not match the compiler payload hash" if not manifest_hash_matches else "",
+        ))
+
         trust_score_total = (
             coverage_score * 0.25
             + leakage_score * 0.25
@@ -202,7 +243,7 @@ class TruthService:
             metrics={
                 "rows": len(dataset_df),
                 "columns": len(dataset_df.columns),
-                "duplicate_timestamps": duplicate_rows,
+                "duplicate_primary_clock_rows": duplicate_rows,
                 "quality_score": quality.get("quality_score", 0.0),
             },
             thresholds={
@@ -214,6 +255,14 @@ class TruthService:
             generated_at=dt.datetime.now(dt.timezone.utc),
             checks=checks,
         )
+
+    @staticmethod
+    def _duplicate_primary_clock_rows(dataset_df: pl.DataFrame) -> int:
+        required = {"symbol", "timeframe", "time_utc"}
+        if not required.issubset(set(dataset_df.columns)):
+            return 0
+        unique_rows = dataset_df.select(["symbol", "timeframe", "time_utc"]).unique().height
+        return max(0, len(dataset_df) - unique_rows)
 
     def _source_quality_metrics(
         self,
