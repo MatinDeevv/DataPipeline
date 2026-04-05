@@ -226,6 +226,37 @@ class StoragePaths:
     def compiler_dataset_file(self, dataset_name: str, artifact_id: str, split: str, part: int = 0) -> Path:
         return self.compiler_dataset_dir(dataset_name, artifact_id, split) / f"part-{part:05d}.parquet"
 
+    # --- Experiment artifacts ---
+    def experiment_root(self, experiment_name: str, artifact_id: str) -> Path:
+        short_name = self._compact_name(experiment_name)
+        short_artifact_id = self._compact_name(artifact_id, prefix_len=18)
+        return (
+            self.root
+            / "experiments"
+            / f"name={short_name}"
+            / f"artifact={short_artifact_id}"
+        )
+
+    def experiment_predictions_file(self, experiment_name: str, artifact_id: str) -> Path:
+        return self.experiment_root(experiment_name, artifact_id) / "predictions.parquet"
+
+    def experiment_summary_file(self, experiment_name: str, artifact_id: str) -> Path:
+        return self.experiment_root(experiment_name, artifact_id) / "summary.json"
+
+    # --- Model artifacts ---
+    def model_root(self, model_name: str, artifact_id: str) -> Path:
+        short_name = self._compact_name(model_name)
+        short_artifact_id = self._compact_name(artifact_id, prefix_len=18)
+        return (
+            self.root
+            / "models"
+            / f"name={short_name}"
+            / f"artifact={short_artifact_id}"
+        )
+
+    def model_payload_file(self, model_name: str, artifact_id: str) -> Path:
+        return self.model_root(model_name, artifact_id) / "model.json"
+
     # --- Compiler manifests ---
     def manifest_dir(self, artifact_kind: str, logical_name: str) -> Path:
         short_name = self._compact_name(logical_name)

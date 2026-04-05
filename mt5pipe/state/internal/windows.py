@@ -89,7 +89,7 @@ def canonical_ticks_to_state_rows(
             symbol=symbol,
             ts_utc=ts_utc,
             ts_msc=ts_msc,
-            clock="tick",
+            clock="TICK",
             window_start_utc=ts_utc,
             window_end_utc=ts_utc,
             bid=bid,

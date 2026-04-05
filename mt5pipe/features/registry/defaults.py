@@ -24,7 +24,9 @@ def get_default_feature_specs() -> list[FeatureSpec]:
             missingness_policy="fail",
             qa_policy_ref="qa.feature.default@1.0.0",
             status="stable",
-            tags=["core", "time"],
+            ablation_group="temporal_context",
+            trainability_tags=["dense", "calendar", "low_missingness"],
+            tags=["core", "time", "temporal_context"],
         ),
         FeatureSpec(
             feature_name="session_flags",
@@ -40,7 +42,9 @@ def get_default_feature_specs() -> list[FeatureSpec]:
             missingness_policy="fail",
             qa_policy_ref="qa.feature.default@1.0.0",
             status="stable",
-            tags=["core", "session"],
+            ablation_group="temporal_context",
+            trainability_tags=["dense", "categorical", "calendar"],
+            tags=["core", "session", "temporal_context"],
         ),
         FeatureSpec(
             feature_name="spread_quality",
@@ -56,7 +60,9 @@ def get_default_feature_specs() -> list[FeatureSpec]:
             missingness_policy="fail",
             qa_policy_ref="qa.feature.default@1.0.0",
             status="stable",
-            tags=["core", "quality"],
+            ablation_group="market_quality",
+            trainability_tags=["dense", "slice_sensitive", "qa_monitor"],
+            tags=["core", "quality", "market_quality"],
         ),
         FeatureSpec(
             feature_name="standard_context",
@@ -78,7 +84,9 @@ def get_default_feature_specs() -> list[FeatureSpec]:
             missingness_policy="allow",
             qa_policy_ref="qa.feature.default@1.0.0",
             status="stable",
-            tags=["core", "context"],
+            ablation_group="higher_timeframe_context",
+            trainability_tags=["cross_scale", "allow_missing", "lagged_context"],
+            tags=["core", "context", "higher_timeframe"],
         ),
         FeatureSpec(
             feature_name="microstructure_pressure",
@@ -109,6 +117,8 @@ def get_default_feature_specs() -> list[FeatureSpec]:
             missingness_policy="allow",
             qa_policy_ref="qa.feature.default@1.0.0",
             status="stable",
+            ablation_group="machine_native_microstructure",
+            trainability_tags=["allow_missing", "warmup_heavy", "microstructure"],
             tags=["core", "microstructure", "phase3"],
         ),
         FeatureSpec(
@@ -137,6 +147,8 @@ def get_default_feature_specs() -> list[FeatureSpec]:
             missingness_policy="allow",
             qa_policy_ref="qa.feature.default@1.0.0",
             status="stable",
+            ablation_group="machine_native_flow",
+            trainability_tags=["allow_missing", "mixed_warmup", "event_proxy"],
             tags=["core", "flow", "phase3"],
         ),
         FeatureSpec(
@@ -161,6 +173,8 @@ def get_default_feature_specs() -> list[FeatureSpec]:
             missingness_policy="allow",
             qa_policy_ref="qa.feature.default@1.0.0",
             status="stable",
+            ablation_group="machine_native_complexity",
+            trainability_tags=["allow_missing", "warmup_heavy", "distributional"],
             tags=["core", "complexity", "phase3"],
         ),
         FeatureSpec(
@@ -186,6 +200,8 @@ def get_default_feature_specs() -> list[FeatureSpec]:
             missingness_policy="allow",
             qa_policy_ref="qa.feature.default@1.0.0",
             status="stable",
+            ablation_group="machine_native_multiscale",
+            trainability_tags=["allow_missing", "warmup_heavy", "cross_scale"],
             tags=["core", "multiscale", "phase4"],
         ),
     ]

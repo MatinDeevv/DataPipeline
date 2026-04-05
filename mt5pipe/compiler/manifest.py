@@ -11,19 +11,26 @@ from typing import Any
 
 import yaml
 
-from mt5pipe.compiler.models import DatasetSpec, LineageManifest
+from mt5pipe.compiler.models import DatasetSpec, ExperimentSpec, LineageManifest
 from mt5pipe.config.models import MergeConfig
 from mt5pipe.storage.paths import StoragePaths
 
 
-def load_dataset_spec(path: Path) -> DatasetSpec:
-    """Load a DatasetSpec from YAML or JSON."""
+def _load_yaml_or_json(path: Path) -> dict[str, Any]:
     raw = path.read_text(encoding="utf-8")
     if path.suffix.lower() in {".yaml", ".yml"}:
-        payload = yaml.safe_load(raw)
-    else:
-        payload = json.loads(raw)
-    return DatasetSpec.model_validate(payload)
+        return yaml.safe_load(raw)
+    return json.loads(raw)
+
+
+def load_dataset_spec(path: Path) -> DatasetSpec:
+    """Load a DatasetSpec from YAML or JSON."""
+    return DatasetSpec.model_validate(_load_yaml_or_json(path))
+
+
+def load_experiment_spec(path: Path) -> ExperimentSpec:
+    """Load an ExperimentSpec from YAML or JSON."""
+    return ExperimentSpec.model_validate(_load_yaml_or_json(path))
 
 
 def build_id_now() -> str:

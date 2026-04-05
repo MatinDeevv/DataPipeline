@@ -13,8 +13,9 @@ from mt5pipe.catalog.models import (
     ArtifactRecord,
     ArtifactStatusEventRecord,
     BuildRunRecord,
+    TrainingRunRecord,
 )
-from mt5pipe.compiler.models import DatasetSpec, LineageManifest
+from mt5pipe.compiler.models import DatasetSpec, ExperimentSpec, LineageManifest
 from mt5pipe.features.public import FeatureSpec
 from mt5pipe.labels.public import LabelPack
 from mt5pipe.truth.models import TrustReport
@@ -57,6 +58,19 @@ CREATE TABLE IF NOT EXISTS dataset_specs (
 )
 """
 
+_CREATE_EXPERIMENT_SPECS_SQL = """
+CREATE TABLE IF NOT EXISTS experiment_specs (
+    experiment_spec_key TEXT PRIMARY KEY,
+    experiment_name TEXT NOT NULL,
+    model_name TEXT NOT NULL,
+    version TEXT NOT NULL,
+    status TEXT NOT NULL,
+    spec_json TEXT NOT NULL,
+    checksum TEXT NOT NULL,
+    created_at TEXT NOT NULL
+)
+"""
+
 _CREATE_BUILD_RUNS_SQL = """
 CREATE TABLE IF NOT EXISTS build_runs (
     build_id TEXT PRIMARY KEY,
@@ -67,6 +81,22 @@ CREATE TABLE IF NOT EXISTS build_runs (
     finished_at TEXT,
     error_message TEXT,
     artifact_id TEXT
+)
+"""
+
+_CREATE_TRAINING_RUNS_SQL = """
+CREATE TABLE IF NOT EXISTS training_runs (
+    run_id TEXT PRIMARY KEY,
+    experiment_spec_key TEXT NOT NULL,
+    dataset_artifact_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    code_version TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    error_message TEXT,
+    experiment_artifact_id TEXT,
+    model_artifact_id TEXT,
+    summary_json TEXT
 )
 """
 
@@ -158,7 +188,9 @@ class CatalogDB:
             self._conn.execute(_CREATE_FEATURE_SPECS_SQL)
             self._conn.execute(_CREATE_LABEL_PACKS_SQL)
             self._conn.execute(_CREATE_DATASET_SPECS_SQL)
+            self._conn.execute(_CREATE_EXPERIMENT_SPECS_SQL)
             self._conn.execute(_CREATE_BUILD_RUNS_SQL)
+            self._conn.execute(_CREATE_TRAINING_RUNS_SQL)
             self._conn.execute(_CREATE_ARTIFACTS_SQL)
             self._conn.execute(_CREATE_ARTIFACT_INPUTS_SQL)
             self._conn.execute(_CREATE_TRUST_REPORTS_SQL)
@@ -207,6 +239,25 @@ class CatalogDB:
                    (dataset_spec_key, dataset_name, version, status, spec_json, checksum, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (spec.key, spec.dataset_name, spec.version, status, spec_json, self._checksum(spec_json), utc_now().isoformat()),
+            )
+
+    def register_experiment_spec(self, spec: ExperimentSpec, *, status: str = "active") -> None:
+        spec_json = json.dumps(spec.model_dump(mode="json"), sort_keys=True, default=str)
+        with self._conn:
+            self._conn.execute(
+                """INSERT OR REPLACE INTO experiment_specs
+                   (experiment_spec_key, experiment_name, model_name, version, status, spec_json, checksum, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    spec.key,
+                    spec.experiment_name,
+                    spec.model_name,
+                    spec.version,
+                    status,
+                    spec_json,
+                    self._checksum(spec_json),
+                    utc_now().isoformat(),
+                ),
             )
 
     def start_build(self, dataset_spec_key: str, code_version: str, build_id: str) -> BuildRunRecord:
@@ -263,6 +314,87 @@ class CatalogDB:
             finished=True,
         )
 
+    def start_training_run(self, experiment_spec_key: str, dataset_artifact_id: str, code_version: str, run_id: str) -> TrainingRunRecord:
+        started_at = utc_now()
+        with self._conn:
+            self._conn.execute(
+                """INSERT OR REPLACE INTO training_runs
+                   (run_id, experiment_spec_key, dataset_artifact_id, status, code_version, started_at, summary_json)
+                   VALUES (?, ?, ?, 'running', ?, ?, ?)""",
+                (
+                    run_id,
+                    experiment_spec_key,
+                    dataset_artifact_id,
+                    code_version,
+                    started_at.isoformat(),
+                    json.dumps({}, sort_keys=True),
+                ),
+            )
+        return TrainingRunRecord(
+            run_id=run_id,
+            experiment_spec_key=experiment_spec_key,
+            dataset_artifact_id=dataset_artifact_id,
+            status="running",
+            code_version=code_version,
+            started_at=started_at,
+            summary={},
+        )
+
+    def update_training_run_status(
+        self,
+        run_id: str,
+        status: str,
+        *,
+        experiment_artifact_id: str | None = None,
+        model_artifact_id: str | None = None,
+        error_message: str | None = None,
+        summary: dict[str, object] | None = None,
+        finished: bool = False,
+    ) -> None:
+        sets = ["status=?"]
+        params: list[object] = [status]
+        if experiment_artifact_id is not None:
+            sets.append("experiment_artifact_id=?")
+            params.append(experiment_artifact_id)
+        if model_artifact_id is not None:
+            sets.append("model_artifact_id=?")
+            params.append(model_artifact_id)
+        if error_message is not None:
+            sets.append("error_message=?")
+            params.append(error_message)
+        if summary is not None:
+            sets.append("summary_json=?")
+            params.append(json.dumps(summary, sort_keys=True, default=str))
+        if finished:
+            sets.append("finished_at=?")
+            params.append(utc_now().isoformat())
+        params.append(run_id)
+        with self._conn:
+            self._conn.execute(
+                f"UPDATE training_runs SET {', '.join(sets)} WHERE run_id=?",
+                tuple(params),
+            )
+
+    def finish_training_run(
+        self,
+        run_id: str,
+        status: str,
+        *,
+        experiment_artifact_id: str | None = None,
+        model_artifact_id: str | None = None,
+        error_message: str = "",
+        summary: dict[str, object] | None = None,
+    ) -> None:
+        self.update_training_run_status(
+            run_id,
+            status,
+            experiment_artifact_id=experiment_artifact_id,
+            model_artifact_id=model_artifact_id,
+            error_message=error_message,
+            summary=summary,
+            finished=True,
+        )
+
     def register_artifact(self, manifest: LineageManifest, manifest_uri: str, *, detail: str = "") -> None:
         existing = self.get_artifact(manifest.artifact_id)
         with self._conn:
@@ -308,6 +440,12 @@ class CatalogDB:
                     """INSERT INTO artifact_inputs (artifact_id, input_kind, input_ref, role, ordinal)
                        VALUES (?, 'dataset_spec', ?, 'spec', 0)""",
                     (manifest.artifact_id, manifest.dataset_spec_ref),
+                )
+            if manifest.experiment_spec_ref:
+                self._conn.execute(
+                    """INSERT INTO artifact_inputs (artifact_id, input_kind, input_ref, role, ordinal)
+                       VALUES (?, 'experiment_spec', ?, 'experiment_spec', 0)""",
+                    (manifest.artifact_id, manifest.experiment_spec_ref),
                 )
             if manifest.label_pack_ref:
                 self._conn.execute(
@@ -390,6 +528,24 @@ class CatalogDB:
             artifact_id=row["artifact_id"],
         )
 
+    def get_training_run(self, run_id: str) -> TrainingRunRecord | None:
+        row = self._conn.execute("SELECT * FROM training_runs WHERE run_id=?", (run_id,)).fetchone()
+        if row is None:
+            return None
+        return TrainingRunRecord(
+            run_id=row["run_id"],
+            experiment_spec_key=row["experiment_spec_key"],
+            dataset_artifact_id=row["dataset_artifact_id"],
+            status=row["status"],
+            code_version=row["code_version"],
+            started_at=dt.datetime.fromisoformat(row["started_at"]),
+            finished_at=dt.datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
+            error_message=row["error_message"] or "",
+            experiment_artifact_id=row["experiment_artifact_id"],
+            model_artifact_id=row["model_artifact_id"],
+            summary=json.loads(row["summary_json"]) if row["summary_json"] else {},
+        )
+
     def get_dataset_spec(self, dataset_spec_key: str) -> DatasetSpec | None:
         row = self._conn.execute(
             "SELECT spec_json FROM dataset_specs WHERE dataset_spec_key=?",
@@ -398,6 +554,21 @@ class CatalogDB:
         if row is None:
             return None
         return DatasetSpec.model_validate_json(row["spec_json"])
+
+    def get_experiment_spec(self, experiment_spec_key: str) -> ExperimentSpec | None:
+        row = self._conn.execute(
+            "SELECT spec_json FROM experiment_specs WHERE experiment_spec_key=?",
+            (experiment_spec_key,),
+        ).fetchone()
+        if row is None:
+            return None
+        return ExperimentSpec.model_validate_json(row["spec_json"])
+
+    def list_experiment_specs(self) -> list[ExperimentSpec]:
+        rows = self._conn.execute(
+            "SELECT spec_json FROM experiment_specs ORDER BY experiment_spec_key ASC"
+        ).fetchall()
+        return [ExperimentSpec.model_validate_json(row["spec_json"]) for row in rows]
 
     def get_feature_spec(self, feature_key: str) -> FeatureSpec | None:
         row = self._conn.execute(

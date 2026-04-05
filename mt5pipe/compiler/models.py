@@ -8,7 +8,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 
-ArtifactStatus = Literal["building", "truth_pending", "accepted", "rejected", "published", "superseded"]
+ArtifactStatus = Literal["building", "truth_pending", "accepted", "rejected", "published", "superseded", "trial"]
+ArtifactKind = Literal["state", "feature_view", "label_view", "dataset", "experiment", "model"]
 
 
 class DatasetSpec(BaseModel):
@@ -66,13 +67,63 @@ class DatasetSpec(BaseModel):
         return self
 
 
+class ExperimentSpec(BaseModel):
+    """Compiler-owned training/evaluation spec for trusted dataset artifacts."""
+
+    schema_version: str = Field(default="1.0.0")
+    experiment_name: str
+    model_name: str
+    version: str
+    description: str | None = None
+    dataset_ref: str
+    target_column: str
+    feature_families: list[str] = Field(default_factory=list)
+    exclude_feature_columns: list[str] = Field(default_factory=list)
+    model_family: Literal["gaussian_nb_binary@1.0.0"] = "gaussian_nb_binary@1.0.0"
+    positive_target_threshold: float = 0.0
+    decision_threshold: float = 0.5
+    evaluation_policy: Literal["walk_forward_holdout"] = "walk_forward_holdout"
+    n_walk_forward_folds: int = 3
+    min_train_rows: int = 2000
+    embargo_rows: int | None = None
+    min_walk_forward_balanced_accuracy: float = 0.50
+    min_test_balanced_accuracy: float = 0.50
+    tags: list[str] = Field(default_factory=list)
+
+    @property
+    def key(self) -> str:
+        return f"{self.experiment_name}@{self.version}"
+
+    @model_validator(mode="after")
+    def validate_spec(self) -> "ExperimentSpec":
+        if not self.dataset_ref.strip():
+            raise ValueError("dataset_ref must not be empty")
+        if not self.target_column.strip():
+            raise ValueError("target_column must not be empty")
+        if self.n_walk_forward_folds <= 0:
+            raise ValueError("n_walk_forward_folds must be > 0")
+        if self.min_train_rows <= 0:
+            raise ValueError("min_train_rows must be > 0")
+        if self.embargo_rows is not None and self.embargo_rows < 0:
+            raise ValueError("embargo_rows must be >= 0 when provided")
+        for field_name in [
+            "decision_threshold",
+            "min_walk_forward_balanced_accuracy",
+            "min_test_balanced_accuracy",
+        ]:
+            value = float(getattr(self, field_name))
+            if not (0.0 <= value <= 1.0):
+                raise ValueError(f"{field_name} must be within [0, 1]")
+        return self
+
+
 class LineageManifest(BaseModel):
     """Immutable lineage record for a compiled artifact."""
 
     schema_version: str = Field(default="1.0.0")
     manifest_id: str
     artifact_id: str
-    artifact_kind: Literal["state", "feature_view", "label_view", "dataset"]
+    artifact_kind: ArtifactKind
     logical_name: str
     logical_version: str
     artifact_uri: str
@@ -81,6 +132,7 @@ class LineageManifest(BaseModel):
     created_at: dt.datetime
     status: ArtifactStatus
     dataset_spec_ref: str | None = None
+    experiment_spec_ref: str | None = None
     state_artifact_refs: list[str] = Field(default_factory=list)
     feature_spec_refs: list[str] = Field(default_factory=list)
     label_pack_ref: str | None = None

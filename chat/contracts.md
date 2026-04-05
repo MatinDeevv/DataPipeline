@@ -321,6 +321,34 @@ impact: compiler/truth consumers should expect earlier availability for non-roll
 docs_updated: yes
 notes: no label pack keys or column names changed
 ```
+
+### [2026-04-05 00:05]
+
+```
+agent: agent_2
+type: contract-change
+module: mt5pipe.features.registry.models, mt5pipe.features.registry.defaults, mt5pipe.labels.registry.models, mt5pipe.labels.registry.defaults
+symbol: FeatureSpec.ablation_group/trainability_tags, LabelPack.qa_policy_ref/ablation_group/trainability_tags/target_groups/tail_policy, stable registry defaults
+old: registry entries exposed status/tags plus core shape, but had no explicit experiment-group metadata or label-pack trainability metadata
+new: feature specs now carry ablation_group and trainability_tags; label packs now carry qa_policy_ref, ablation_group, trainability_tags, target_groups, and tail_policy; stable defaults populate those fields for the production selector set and core_tb_volscaled@1.0.0
+impact: compiler/catalog/training consumers can group stable features by ablation bucket and inspect label-pack training assumptions without inferring them from names alone
+docs_updated: yes
+notes: additive only; no existing feature keys, label-pack keys, or output column names changed
+```
+
+### [2026-04-05 00:05]
+
+```
+agent: agent_2
+type: contract-change
+module: mt5pipe.features.service, mt5pipe.labels.service
+symbol: feature_view manifest metadata.trainability_diagnostics, label_view metadata.label_diagnostics/trainability fields, direction_threshold_bps service behavior
+old: feature artifacts exposed only basic row/column/output metadata; label artifacts exposed horizon/tail/class-balance diagnostics but not experiment-readiness summaries, target-distribution summaries, or pack-level trainability metadata; label service ignored direction-threshold pack parameters
+new: feature artifacts now publish family/status/ablation/tags plus trainability_diagnostics with post-warmup coverage, complete-row ratio, constant/low-variation/null-heavy columns, and warning reasons; label artifacts now publish pack-level trainability metadata, target-distribution summaries, degenerate-horizon warnings, and direction-threshold/barrier settings, and label service honors parameters.direction_threshold_bps when materializing direction_* targets
+impact: Agent 3 and downstream training workflows can inspect whether a feature family or label horizon is trainable directly from artifact metadata, and future label packs can tighten direction targets without changing generator plumbing
+docs_updated: yes
+notes: default core_tb_volscaled@1.0.0 keeps direction_threshold_bps=0.0, so current output semantics stay unchanged unless a pack explicitly opts in
+```
 ### [2026-04-04 23:32]
 
 ```
@@ -333,4 +361,59 @@ new: state and state-window partition writes are reset before rewrite and public
 impact: Agent 2 and Agent 3 can rely on stable persisted state/state-window loads and more informative source-quality inputs on the current nonhuman dataset path without importing truth/compiler internals
 docs_updated: no
 notes: additive behavioral hardening only; no new public symbols or contract fields were introduced
+```
+### [2026-04-05 00:06]
+
+```
+agent: agent_1
+type: contract-change
+module: mt5pipe.contracts.state
+symbol: TickArtifactRef, StateArtifactRef, StateWindowArtifactRef, StateWindowRequest normalization behavior
+old: typed state refs/requests preserved incoming symbol, clock, and window-size casing verbatim, so callers could accidentally depend on xauusd vs XAUUSD or m1 vs M1 differences
+new: state refs/requests now normalize symbol -> upper-case, clock -> upper-case, window_size -> normalized compact lower-case form, and trim state_version/source_artifact_id strings
+impact: Agent 2/3 and future callers can treat state refs/requests as case-stable contracts; later symbol additions such as XAGUSD/USOIL will not require casing-specific workarounds at the state boundary
+docs_updated: no
+notes: additive hygiene only; no path semantics or merge/backfill behavior changed
+```
+
+### [2026-04-05 00:06]
+
+```
+agent: agent_1
+type: contract-change
+module: mt5pipe.state.models, mt5pipe.state.public, mt5pipe.state.service
+symbol: StateReadinessSummary, StateIntervalReadinessSummary, StateArtifactManifest.readiness_summary/daily_readiness_rollups/session_readiness_rollups, StateMaterializationResult.readiness_summary, StateWindowMaterializationResult.readiness_summary
+old: state manifests/results exposed coverage_summary and source_quality_summary, but did not provide typed range-level readiness metadata, daily/session rollups, or window-availability summaries for downstream truth/training consumers
+new: state artifacts now expose typed readiness summaries with effective coverage, gap burden, overlap/source reliability bands, readiness bands, and window-availability ratios; manifests/results also carry daily and per-day-session readiness rollups through mt5pipe.state.public
+impact: Agent 2 and Agent 3 can rely on stable state-side training-readiness metadata without importing state internals or re-deriving rollups downstream
+docs_updated: no
+notes: additive shape expansion only; current public symbols remain stable and no new service entrypoints were added
+```
+
+### [2026-04-05 00:35]
+
+```
+agent: agent_3
+type: contract-change
+module: mt5pipe.compiler.models, mt5pipe.compiler.manifest, mt5pipe.compiler.public
+symbol: ArtifactKind(experiment, model), ArtifactStatus(trial), ExperimentSpec, LineageManifest.experiment_spec_ref, load_experiment_spec, run_experiment_spec, inspect_experiment, inspect_model, ExperimentRunResult, ExperimentInspection, ModelInspection
+old: compiler public surface only covered dataset compilation/inspection/diff; manifests only linked dataset specs; no typed experiment spec or compiler-owned experiment/model artifact surface existed
+new: compiler now exposes a first-class training/evaluation boundary with ExperimentSpec plus public run/inspect helpers for experiment/model artifacts, and manifests can link experiment specs through experiment_spec_ref while artifact kinds now include experiment/model and model status can be trial
+impact: compiler-facing consumers can run trust-gated experiments and inspect experiment/model lineage without importing compiler internals; catalog/manifests can represent the first training registry layer cleanly
+docs_updated: yes
+notes: the first example spec is config/experiments/xau_m1_nonhuman_direction_nb_v1.yaml and targets dataset://xau_m1_nonhuman@1.0.0 with direction_60m
+```
+
+### [2026-04-05 00:35]
+
+```
+agent: agent_3
+type: contract-change
+module: mt5pipe.catalog.sqlite, mt5pipe.storage.paths, mt5pipe.cli.train_cmds
+symbol: experiment_specs/training_runs catalog tables, experiment:// and model:// alias lifecycle, compact experiment/model storage roots, train run-experiment|inspect-experiment|inspect-model
+old: catalog only tracked dataset specs/build runs/truth-backed artifacts; storage path conventions only covered datasets/manifests/truth; there was no compiler-facing training CLI
+new: catalog now persists experiment specs and training-run lifecycle metadata linked to dataset/model artifact ids; experiment/model artifacts are registered through the shared artifact catalog and resolved via explicit experiment:// and model:// aliases; storage roots for experiment/model artifacts use compact path segments to stay Windows-safe; the CLI now exposes minimal train commands for running and inspecting trust-gated experiments
+impact: training/evaluation runs are reproducible, inspectable, and lineage-linked through the existing catalog/manifests while remaining usable on Windows workspaces
+docs_updated: yes
+notes: training still hard-gates on dataset trust acceptance and currently ships one deterministic baseline model family, gaussian_nb_binary@1.0.0
 ```

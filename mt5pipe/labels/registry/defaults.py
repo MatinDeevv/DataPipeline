@@ -1,4 +1,4 @@
-"""Default Phase 1 label packs."""
+"""Default stable label packs."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def get_default_label_packs() -> list[LabelPack]:
         LabelPack(
             label_pack_name="core_tb_volscaled",
             version="1.0.0",
-            description="Future returns, direction, and vol-scaled triple-barrier labels",
+            description="Multi-horizon future returns, direction, and vol-scaled triple-barrier labels",
             base_clock="M1",
             horizons_minutes=horizons,
             generator_refs=[
@@ -34,11 +34,17 @@ def get_default_label_packs() -> list[LabelPack]:
                 "sl_bps": 50.0,
                 "vol_scale_window": 60,
                 "vol_multiplier": 2.0,
+                "direction_threshold_bps": 0.0,
             },
             exclusions=["filled_rows"],
             purge_rows=max(horizons) + 1,
             output_columns=output_columns,
+            qa_policy_ref="qa.label.default@1.0.0",
             status="stable",
+            ablation_group="core_nonhuman_targets",
+            trainability_tags=["multi_horizon", "multi_task", "strict_tail_nulls", "vol_scaled_barriers"],
+            target_groups=["future_return", "direction", "triple_barrier", "excursion"],
+            tail_policy="strict_null",
         )
     ]
 

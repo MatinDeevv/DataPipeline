@@ -156,3 +156,38 @@ needs: None for this checkpoint. Remaining caveats are accepted slice-trivial co
 files: mt5pipe/truth/service.py, mt5pipe/cli/dataset_cmds.py, tests/test_truth_core.py, tests/test_dataset_cli_compat.py, chat/contracts.md, chat/coordination.md, docs/parallel_dev_architecture.md
 verification: pytest tests/test_compiler.py tests/test_truth_core.py tests/test_catalog.py tests/test_dataset_cli_compat.py -q -> 18 passed; python -m mt5pipe.cli.app dataset compile-dataset --spec config/datasets/xau_m1_core_v1.yaml --publish -> dataset.xau_m1_core.01db30739cac published accepted 97.72; python -m mt5pipe.cli.app dataset compile-dataset --spec config/datasets/xau_m1_nonhuman_v1.yaml --publish -> dataset.xau_m1_nonhuman.1af51fbdf628 published accepted 97.72; inspect/diff on dataset://xau_m1_nonhuman@1.0.0 show trust_warning_reasons=[], source_quality=77.2389, accepted_caveats only
 ```
+
+### [2026-04-04 23:53:37 -04:00] agent_3 - phase5 start
+
+feedback_read: yes
+feedback_source: feedbacks/latest.md
+feedback_summary: Freeze the architecture that worked, keep the compiler/trust path as the center of gravity, and expand only where it improves research-grade artifact quality. Phase 5 training readiness needs disciplined lineage, reproducibility, and trust-gated usage rather than a kitchen-sink research layer.
+phase: Phase 5
+area: compiler|truth|catalog|cli|training
+
+```
+agent: agent_3
+type: update
+area: compiler/truth/catalog/cli/training
+summary: Starting Phase 5 by designing a minimal but real training/evaluation path on top of accepted dataset artifacts. I am auditing the existing catalog/compiler surface first so the experiment registry, model registry, and CLI training workflow reuse the green Dataset OS rather than bypassing it.
+needs: Will keep training strictly trust-gated, lineage-linked, and inspectable; any public compiler, registry, manifest, trust, or CLI behavior changes will be logged in contracts/docs immediately.
+files: feedbacks/latest.md, chat/contracts.md, chat/coordination.md, chat/agent_3.md, mt5pipe/state/public.py, mt5pipe/features/public.py, mt5pipe/labels/public.py, mt5pipe/compiler/public.py
+```
+
+### [2026-04-05 00:35:38 -04:00] agent_3 - phase5 complete
+
+feedback_read: yes
+feedback_source: feedbacks/latest.md
+feedback_summary: Freeze the architecture that worked, keep compiler/trust as the center of gravity, and add only disciplined training-readiness layers with full lineage and hard trust gates. Phase 5 should end with one real institutional training path, not placeholders.
+phase: Phase 5
+area: compiler|truth|catalog|cli|training
+
+```
+agent: agent_3
+type: completion
+area: compiler/truth/catalog/cli/training
+summary: Implemented the first trust-gated institutional training path on top of accepted dataset artifacts. The compiler boundary now includes ExperimentSpec plus experiment/model inspection helpers, the catalog tracks experiment specs and training runs, experiment/model artifacts are registered through the shared manifest system, and the CLI exposes run-experiment / inspect-experiment / inspect-model with deterministic summaries.
+needs: Phase 5 is stable for one baseline model path only. Future phases should add richer model families, comparison tooling, and deeper evaluation diagnostics without weakening the trusted-dataset gate or splitting artifact lineage across parallel registries.
+files: mt5pipe/compiler/models.py, mt5pipe/compiler/manifest.py, mt5pipe/compiler/public.py, mt5pipe/compiler/training.py, mt5pipe/catalog/models.py, mt5pipe/catalog/sqlite.py, mt5pipe/storage/paths.py, mt5pipe/cli/train_cmds.py, mt5pipe/cli/app.py, config/experiments/xau_m1_nonhuman_direction_nb_v1.yaml, tests/test_training_flow.py, docs/parallel_dev_architecture.md, chat/contracts.md, chat/coordination.md
+verification: pytest tests/test_training_flow.py tests/test_compiler.py tests/test_catalog.py tests/test_dataset_cli_compat.py tests/test_boundary_imports.py -q -> 21 passed, 1 xfailed; python -m mt5pipe.cli.app dataset inspect-dataset --artifact dataset://xau_m1_nonhuman@1.0.0 -> accepted trusted dataset artifact 97.72; python -m mt5pipe.cli.app train run-experiment --spec config/experiments/xau_m1_nonhuman_direction_nb_v1.yaml -> experiment.xau_m1_nonhuman_direction_nb.402c9aa8664d accepted, model.xau_m1_nonhuman_direction_nb.710a3e456ec2 accepted, walk_forward_balanced_accuracy_mean=0.5354, holdout_balanced_accuracy=0.5096; inspect-experiment / inspect-model by alias returned linked dataset/model/run summaries successfully
+```

@@ -110,3 +110,20 @@ demoted-from-stable: htf_context/* -> M5_tick_count M15_tick_count H1_tick_count
 tests: pytest tests/test_features_phase3.py tests/test_features_phase4.py tests/test_features_phase4_checkpoint.py tests/test_labels.py tests/test_compiler.py tests/test_boundary_imports.py tests/test_truth_core.py tests/test_contracts.py -q
 result: 59 passed, 1 xfailed
 
+[2026-04-05T00:05:43.1234689-04:00]
+agent: agent_2
+area: features|labels
+summary: Phase 5 landed as a trainability/metadata pass, not a new-family pass. Stable feature specs now expose ablation_group/trainability_tags, core_tb_volscaled@1.0.0 now exposes explicit training assumptions, feature-view manifests publish post-warmup trainability diagnostics, and label-view manifests publish target-distribution plus degenerate-horizon diagnostics.
+update: label service now honors parameters.direction_threshold_bps for direction_* generation, but the default stable pack keeps that at 0.0 so current outputs remain backward-compatible unless a future pack opts in.
+stable-training-surface: feature manifest metadata.trainability_diagnostics; label manifest metadata.label_diagnostics with target_distribution_summary, degenerate_*_horizons, tail_mismatch_horizons, and pack-level trainability metadata.
+tests: pytest tests/test_features_phase5.py tests/test_features_phase4_checkpoint.py tests/test_features_phase4.py tests/test_features_phase3.py tests/test_labels.py tests/test_compiler.py tests/test_truth_core.py tests/test_boundary_imports.py tests/test_contracts.py -q
+result: 67 passed, 1 xfailed
+
+
+[2026-04-04T23:53:17.5707081-04:00]
+agent: agent_2
+feedback_read: yes
+feedback_source: feedbacks/latest.md
+feedback_summary: Freeze the stable feature surface and improve trainability, label maturity, and artifact evaluability without broad feature expansion. For Agent 2 this means stronger diagnostics, clearer metadata, and cleaner training assumptions on the existing families.
+phase: Phase 5
+area: features|labels

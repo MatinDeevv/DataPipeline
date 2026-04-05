@@ -33,6 +33,14 @@ def parse_window_size(value: str) -> dt.timedelta:
     return dt.timedelta(days=count)
 
 
+def _normalize_symbol(value: str) -> str:
+    return value.strip().upper()
+
+
+def _normalize_clock(value: str) -> str:
+    return value.strip().upper()
+
+
 class TickArtifactRef(ArtifactRef):
     """Reference to a canonical tick artifact range."""
 
@@ -44,6 +52,8 @@ class TickArtifactRef(ArtifactRef):
 
     @model_validator(mode="after")
     def validate_dates(self) -> "TickArtifactRef":
+        self.symbol = _normalize_symbol(self.symbol)
+        self.ts_column = self.ts_column.strip()
         if self.date_from > self.date_to:
             raise ValueError("date_from must be <= date_to")
         return self
@@ -61,6 +71,9 @@ class StateArtifactRef(ArtifactRef):
 
     @model_validator(mode="after")
     def validate_dates(self) -> "StateArtifactRef":
+        self.symbol = _normalize_symbol(self.symbol)
+        self.clock = _normalize_clock(self.clock)
+        self.state_version = self.state_version.strip()
         if self.date_from > self.date_to:
             raise ValueError("date_from must be <= date_to")
         return self
@@ -80,6 +93,11 @@ class StateWindowArtifactRef(ArtifactRef):
 
     @model_validator(mode="after")
     def validate_window(self) -> "StateWindowArtifactRef":
+        self.symbol = _normalize_symbol(self.symbol)
+        self.clock = _normalize_clock(self.clock)
+        self.state_version = self.state_version.strip()
+        self.window_size = self.window_size.strip().lower()
+        self.source_artifact_id = self.source_artifact_id.strip()
         if self.date_from > self.date_to:
             raise ValueError("date_from must be <= date_to")
         parse_window_size(self.window_size)
@@ -100,6 +118,10 @@ class StateWindowRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_request(self) -> "StateWindowRequest":
+        self.symbol = _normalize_symbol(self.symbol)
+        self.clock = _normalize_clock(self.clock)
+        self.state_version = self.state_version.strip()
+        self.window_sizes = [size.strip().lower() for size in self.window_sizes]
         if self.date_from > self.date_to:
             raise ValueError("date_from must be <= date_to")
         if not self.window_sizes:

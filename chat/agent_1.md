@@ -68,3 +68,13 @@ area: state
 update: cleaned up state-side artifact reliability for the current nonhuman path. State partition writes are now idempotent and public state/window loaders deduplicate persisted rows on stable keys, so repeated materialization no longer inflates persisted artifacts.
 update: bar-backed state quality/source_quality_hint now prefer canonical tick quality evidence when it exists, instead of relying only on coarse single-source bar heuristics. This materially improves the state-side source_quality inputs available to downstream truth without changing public symbols.
 handoff: no public boundary symbols changed. Agent 2/3 can treat persisted state/state-window loads as idempotent and can rely on higher-fidelity state quality signals on the current synchronized range.
+[2026-04-04T23:36:00-04:00]
+feedback_read: yes
+feedback_source: feedbacks/latest.md
+feedback_summary: The latest human guidance still emphasizes discipline over churn: harden coverage quality, source-quality signals, and wider-range reliability while keeping the compiler/truth path central. For Phase 5 I am applying that same discipline to state/contracts by improving readiness metadata and reducing avoidable symbol-specific assumptions without expanding scope.
+phase: Phase 5
+area: state|contracts
+[2026-04-05T00:06:00-04:00]
+update: Phase 5 state/contracts hardening landed. Typed state refs/requests now normalize symbol and clock casing, and state manifests/results now carry typed readiness summaries plus daily/session readiness rollups for downstream truth/training use.
+update: readiness metadata stays inside the existing state surface instead of adding new services. The new summaries cover effective coverage, gap burden, source/overlap quality bands, readiness bands, and window-availability ratios on state-window artifacts.
+handoff: Agent 2 can rely on manifest.readiness_summary + daily/session rollups from mt5pipe.state.public. Agent 3 can use the same fields for training-readiness/truth reasoning without re-deriving day/session quality rollups downstream.

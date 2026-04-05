@@ -10,7 +10,14 @@ from mt5pipe.contracts import StateArtifactRef, StateWindowArtifactRef, StateWin
 from mt5pipe.compiler.models import DatasetSpec, LineageManifest
 from mt5pipe.features.registry.models import FeatureSpec
 from mt5pipe.labels.registry.models import LabelPack
-from mt5pipe.state.models import StateCoverageSummary, StateSnapshot, StateSourceQualitySummary, StateWindowRecord
+from mt5pipe.state.models import (
+    StateCoverageSummary,
+    StateIntervalReadinessSummary,
+    StateReadinessSummary,
+    StateSnapshot,
+    StateSourceQualitySummary,
+    StateWindowRecord,
+)
 from mt5pipe.truth.models import QaCheckResult, TrustReport
 
 
@@ -53,7 +60,7 @@ def test_state_refs_and_window_request_validate_shape() -> None:
         logical_name="XAUUSD",
         version="1.0.0",
         content_hash="abc123",
-        symbol="XAUUSD",
+        symbol=" xauusd ",
         date_from=dt.date(2026, 4, 1),
         date_to=dt.date(2026, 4, 2),
     )
@@ -62,8 +69,8 @@ def test_state_refs_and_window_request_validate_shape() -> None:
         logical_name="XAUUSD.M1",
         version="state.default@1.0.0",
         content_hash="abc123",
-        symbol="XAUUSD",
-        clock="M1",
+        symbol="xauusd",
+        clock="m1",
         state_version="state.default@1.0.0",
         date_from=dt.date(2026, 4, 1),
         date_to=dt.date(2026, 4, 2),
@@ -73,27 +80,33 @@ def test_state_refs_and_window_request_validate_shape() -> None:
         logical_name="XAUUSD.M1.5m",
         version="state.default@1.0.0",
         content_hash="abc123",
-        symbol="XAUUSD",
-        clock="M1",
+        symbol=" xauusd ",
+        clock="m1",
         state_version="state.default@1.0.0",
-        window_size="5m",
+        window_size=" 5M ",
         date_from=dt.date(2026, 4, 1),
         date_to=dt.date(2026, 4, 2),
         source_artifact_id=state_ref.artifact_id,
     )
     request = StateWindowRequest(
-        symbol="XAUUSD",
-        clock="M1",
-        state_version="state.default@1.0.0",
+        symbol="xauusd",
+        clock="m1",
+        state_version=" state.default@1.0.0 ",
         date_from=dt.date(2026, 4, 1),
         date_to=dt.date(2026, 4, 2),
-        window_sizes=["30s", "60s", "5m"],
+        window_sizes=[" 30S ", "60S", "5M"],
     )
 
     assert tick_ref.kind.value == "canonical_tick"
+    assert tick_ref.symbol == "XAUUSD"
     assert state_ref.kind.value == "state"
+    assert state_ref.symbol == "XAUUSD"
+    assert state_ref.clock == "M1"
     assert window_ref.kind.value == "state_window"
+    assert window_ref.window_size == "5m"
     assert parse_window_size("5m") == dt.timedelta(minutes=5)
+    assert request.symbol == "XAUUSD"
+    assert request.clock == "M1"
     assert request.window_sizes == ["30s", "60s", "5m"]
 
 
@@ -213,6 +226,53 @@ def test_state_coverage_and_source_quality_summaries_validate() -> None:
 
     assert coverage.gap_count == 1
     assert source.dual_source_ratio == 0.7
+
+
+def test_state_readiness_and_interval_rollups_validate() -> None:
+    readiness = StateReadinessSummary(
+        interval_count=10,
+        effective_observation_count=9,
+        effective_coverage_ratio=0.9,
+        ready_interval_count=8,
+        ready_interval_ratio=0.8,
+        gap_heavy_interval_count=1,
+        gap_heavy_interval_ratio=0.1,
+        low_overlap_interval_ratio=0.2,
+        low_quality_interval_ratio=0.1,
+        source_reliability_band="medium",
+        overlap_quality_band="medium",
+        gap_burden_band="medium",
+        readiness_band="ready",
+        eligible_anchor_count=10,
+        available_window_count=8,
+        missing_window_count=2,
+        available_window_ratio=0.8,
+        full_window_ratio=0.75,
+        partial_window_ratio=0.25,
+    )
+    rollup = StateIntervalReadinessSummary(
+        interval_kind="day",
+        interval_key="2026-04-01",
+        date=dt.date(2026, 4, 1),
+        interval_count=5,
+        effective_coverage_ratio=0.92,
+        filled_ratio=0.08,
+        gap_burden_ratio=0.2,
+        mean_quality_score=81.0,
+        mean_source_quality_hint=79.0,
+        mean_source_participation_score=0.45,
+        mean_overlap_confidence=0.22,
+        ready_interval_count=4,
+        ready_interval_ratio=0.8,
+        gap_heavy_interval_count=1,
+        source_reliability_band="medium",
+        overlap_quality_band="medium",
+        gap_burden_band="high",
+        readiness_band="ready",
+    )
+
+    assert readiness.available_window_ratio == 0.8
+    assert rollup.interval_kind == "day"
 
 
 def test_feature_spec_requires_unique_output_columns() -> None:

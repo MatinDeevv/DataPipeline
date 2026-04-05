@@ -10,6 +10,7 @@ from mt5pipe.cli.dataset_cmds import dataset_app
 from mt5pipe.cli.live_cmds import live_app
 from mt5pipe.cli.merge_cmds import merge_app
 from mt5pipe.cli.status_cmds import status_app
+from mt5pipe.cli.train_cmds import train_app
 
 app = typer.Typer(
     name="mt5pipe",
@@ -23,6 +24,7 @@ app.add_typer(live_app, name="live", help="Live data collection")
 app.add_typer(merge_app, name="merge", help="Canonical tick merge")
 app.add_typer(bar_app, name="bars", help="Build bars from ticks")
 app.add_typer(dataset_app, name="dataset", help="Build model-ready datasets")
+app.add_typer(train_app, name="train", help="Run trust-gated experiments")
 app.add_typer(status_app, name="status", help="Pipeline status and validation")
 
 

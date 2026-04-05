@@ -28,6 +28,8 @@ from mt5pipe.state.internal.artifacts import (
 from mt5pipe.state.internal.bar_support import detect_gaps, fill_bar_gaps, timeframe_to_seconds, validate_bars
 from mt5pipe.state.internal.quality import (
     build_state_coverage_summary,
+    build_state_interval_readiness_rollups,
+    build_state_readiness_summary,
     build_state_source_quality_summary,
     snapshot_overlap_confidence_hint,
     snapshot_source_participation_score,
@@ -37,6 +39,8 @@ from mt5pipe.state.internal.windows import build_state_windows, canonical_ticks_
 from mt5pipe.state.models import (
     StateArtifactManifest,
     StateCoverageSummary,
+    StateIntervalReadinessSummary,
+    StateReadinessSummary,
     StateSnapshot,
     StateSourceQualitySummary,
 )
@@ -52,6 +56,9 @@ class StateMaterializationResult:
     manifest_path: Path
     coverage_summary: StateCoverageSummary
     source_quality_summary: StateSourceQualitySummary
+    readiness_summary: StateReadinessSummary
+    daily_readiness_rollups: list[StateIntervalReadinessSummary]
+    session_readiness_rollups: list[StateIntervalReadinessSummary]
     state_df: pl.DataFrame
     base_df: pl.DataFrame
 
@@ -63,6 +70,9 @@ class StateWindowMaterializationResult:
     manifest_path: Path
     coverage_summary: StateCoverageSummary
     source_quality_summary: StateSourceQualitySummary
+    readiness_summary: StateReadinessSummary
+    daily_readiness_rollups: list[StateIntervalReadinessSummary]
+    session_readiness_rollups: list[StateIntervalReadinessSummary]
     window_df: pl.DataFrame
 
 
@@ -93,6 +103,8 @@ class StateService:
         merge_config_ref: str,
     ) -> StateMaterializationResult:
         """Materialize bar-backed state snapshots. Kept compatible for compiler usage."""
+        symbol = self._normalize_symbol(symbol)
+        clock = self._normalize_clock(clock)
         base_df = self._load_bars_range(symbol, clock, date_from, date_to)
         if base_df.is_empty():
             raise FileNotFoundError(
@@ -138,6 +150,7 @@ class StateService:
         merge_config_ref: str | None = None,
     ) -> StateMaterializationResult:
         """Materialize tick-level state snapshots from canonical ticks."""
+        symbol = self._normalize_symbol(symbol)
         canonical_df = self.load_tick_artifact(
             TickArtifactRef(
                 artifact_id=f"canonical_tick.{symbol}.{date_from.isoformat()}.{date_to.isoformat()}",
@@ -164,7 +177,7 @@ class StateService:
         input_partition_refs = self._collect_tick_input_partition_refs(symbol, date_from, date_to)
         return self._persist_state_artifact(
             symbol=symbol,
-            clock="tick",
+            clock=self._normalize_clock("tick"),
             state_version_ref=state_version_ref,
             date_from=date_from,
             date_to=date_to,
@@ -269,6 +282,9 @@ class StateService:
                 source_ref.date_to,
             )
 
+        anchor_state_df = state_df.filter(
+            pl.col("ts_utc").dt.date().is_between(request.date_from, request.date_to, closed="both")
+        )
         results: dict[str, StateWindowMaterializationResult] = {}
         resolved_build_id = build_id or build_id_now("state-window")
         resolved_code_version = code_version or state_code_version()
@@ -288,6 +304,17 @@ class StateService:
             logical_name = f"{request.symbol}.{clock}.{window_size}"
             coverage_summary = build_state_coverage_summary(window_df, clock=clock)
             source_quality_summary = build_state_source_quality_summary(window_df)
+            readiness_summary = build_state_readiness_summary(
+                window_df,
+                clock=clock,
+                eligible_anchor_count=anchor_state_df.height,
+            )
+            daily_readiness_rollups = build_state_interval_readiness_rollups(window_df, clock=clock, interval_kind="day")
+            session_readiness_rollups = build_state_interval_readiness_rollups(
+                window_df,
+                clock=clock,
+                interval_kind="session",
+            )
             content_hash = compute_content_hash(
                 {
                     "artifact_kind": "state_window",
@@ -302,6 +329,7 @@ class StateService:
                     "input_partition_refs": input_partition_refs,
                     "coverage_summary": coverage_summary.model_dump(mode="json"),
                     "source_quality_summary": source_quality_summary.model_dump(mode="json"),
+                    "readiness_summary": readiness_summary.model_dump(mode="json"),
                 }
             )
             artifact_id = build_artifact_id("state_window", logical_name, content_hash)
@@ -343,6 +371,9 @@ class StateService:
                 time_range_end_utc=coverage_summary.time_range_end_utc,
                 coverage_summary=coverage_summary,
                 source_quality_summary=source_quality_summary,
+                readiness_summary=readiness_summary,
+                daily_readiness_rollups=daily_readiness_rollups,
+                session_readiness_rollups=session_readiness_rollups,
                 metadata={
                     "row_count": len(window_df),
                     "column_count": len(window_df.columns),
@@ -352,6 +383,9 @@ class StateService:
                     "source_artifact_id": source_artifact_id,
                     "coverage_summary": coverage_summary.model_dump(mode="json"),
                     "source_quality_summary": source_quality_summary.model_dump(mode="json"),
+                    "readiness_summary": readiness_summary.model_dump(mode="json"),
+                    "daily_readiness_rollups": [rollup.model_dump(mode="json") for rollup in daily_readiness_rollups],
+                    "session_readiness_rollups": [rollup.model_dump(mode="json") for rollup in session_readiness_rollups],
                 },
             )
             self._write_state_window_partitions(request.symbol, clock, request.state_version, window_size, window_df)
@@ -363,6 +397,9 @@ class StateService:
                 manifest_path=manifest_path,
                 coverage_summary=coverage_summary,
                 source_quality_summary=source_quality_summary,
+                readiness_summary=readiness_summary,
+                daily_readiness_rollups=daily_readiness_rollups,
+                session_readiness_rollups=session_readiness_rollups,
                 window_df=window_df,
             )
 
@@ -407,6 +444,9 @@ class StateService:
         logical_name = f"{symbol}.{clock}"
         coverage_summary = build_state_coverage_summary(state_df, clock=clock)
         source_quality_summary = build_state_source_quality_summary(state_df)
+        readiness_summary = build_state_readiness_summary(state_df, clock=clock)
+        daily_readiness_rollups = build_state_interval_readiness_rollups(state_df, clock=clock, interval_kind="day")
+        session_readiness_rollups = build_state_interval_readiness_rollups(state_df, clock=clock, interval_kind="session")
         content_hash = compute_content_hash(
             {
                 "artifact_kind": "state",
@@ -419,6 +459,7 @@ class StateService:
                 "input_partition_refs": input_partition_refs,
                 "coverage_summary": coverage_summary.model_dump(mode="json"),
                 "source_quality_summary": source_quality_summary.model_dump(mode="json"),
+                "readiness_summary": readiness_summary.model_dump(mode="json"),
             }
         )
         artifact_id = build_artifact_id("state", logical_name, content_hash)
@@ -456,6 +497,9 @@ class StateService:
             time_range_end_utc=coverage_summary.time_range_end_utc,
             coverage_summary=coverage_summary,
             source_quality_summary=source_quality_summary,
+            readiness_summary=readiness_summary,
+            daily_readiness_rollups=daily_readiness_rollups,
+            session_readiness_rollups=session_readiness_rollups,
             metadata={
                 "row_count": len(state_df),
                 "column_count": len(state_df.columns),
@@ -464,6 +508,9 @@ class StateService:
                 "clock": clock,
                 "coverage_summary": coverage_summary.model_dump(mode="json"),
                 "source_quality_summary": source_quality_summary.model_dump(mode="json"),
+                "readiness_summary": readiness_summary.model_dump(mode="json"),
+                "daily_readiness_rollups": [rollup.model_dump(mode="json") for rollup in daily_readiness_rollups],
+                "session_readiness_rollups": [rollup.model_dump(mode="json") for rollup in session_readiness_rollups],
             },
         )
 
@@ -477,6 +524,9 @@ class StateService:
             manifest_path=manifest_path,
             coverage_summary=coverage_summary,
             source_quality_summary=source_quality_summary,
+            readiness_summary=readiness_summary,
+            daily_readiness_rollups=daily_readiness_rollups,
+            session_readiness_rollups=session_readiness_rollups,
             state_df=state_df,
             base_df=base_df,
         )
@@ -845,6 +895,14 @@ class StateService:
             return float(ask)
         close = float(row.get("close", 0.0) or 0.0)
         return max(close + (spread / 2.0), bid)
+
+    @staticmethod
+    def _normalize_symbol(symbol: str) -> str:
+        return symbol.strip().upper()
+
+    @staticmethod
+    def _normalize_clock(clock: str) -> str:
+        return clock.strip().upper()
 
     @staticmethod
     def _quality_score(

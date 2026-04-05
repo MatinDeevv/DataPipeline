@@ -1,13 +1,19 @@
-"""Coverage and source-quality summaries for state artifacts."""
+"""Coverage, readiness, and source-quality summaries for state artifacts."""
 
 from __future__ import annotations
 
+import datetime as dt
 import math
 
 import polars as pl
 
 from mt5pipe.state.internal.bar_support import timeframe_to_seconds
-from mt5pipe.state.models import StateCoverageSummary, StateSourceQualitySummary
+from mt5pipe.state.models import (
+    StateCoverageSummary,
+    StateIntervalReadinessSummary,
+    StateReadinessSummary,
+    StateSourceQualitySummary,
+)
 
 
 def state_resolution_ms(clock: str, *, tick_resolution_ms: int = 1_000) -> int:
@@ -147,6 +153,174 @@ def build_state_source_quality_summary(state_df: pl.DataFrame) -> StateSourceQua
         p95_primary_staleness_ms=_percentile(staleness_values, 0.95),
         max_primary_staleness_ms=max(staleness_values, default=0),
     )
+
+
+def build_state_readiness_summary(
+    state_df: pl.DataFrame,
+    *,
+    clock: str,
+    eligible_anchor_count: int | None = None,
+) -> StateReadinessSummary:
+    """Summarize whether a state frame looks training-ready over its materialized range."""
+    metrics = _row_readiness_metrics(state_df, clock=clock)
+    if not metrics:
+        return StateReadinessSummary(
+            interval_count=0,
+            effective_observation_count=0,
+            effective_coverage_ratio=0.0,
+            ready_interval_count=0,
+            ready_interval_ratio=0.0,
+            gap_heavy_interval_count=0,
+            gap_heavy_interval_ratio=0.0,
+            low_overlap_interval_ratio=0.0,
+            low_quality_interval_ratio=0.0,
+            source_reliability_band="low",
+            overlap_quality_band="low",
+            gap_burden_band="high",
+            readiness_band="not_ready",
+            eligible_anchor_count=eligible_anchor_count,
+            available_window_count=0 if eligible_anchor_count is not None else None,
+            missing_window_count=eligible_anchor_count if eligible_anchor_count is not None else None,
+            available_window_ratio=0.0 if eligible_anchor_count is not None else None,
+            full_window_ratio=0.0 if eligible_anchor_count is not None else None,
+            partial_window_ratio=0.0 if eligible_anchor_count is not None else None,
+        )
+
+    interval_count = len(metrics)
+    ready_interval_count = sum(1 for metric in metrics if metric["ready_flag"])
+    gap_heavy_interval_count = sum(1 for metric in metrics if metric["gap_heavy_flag"])
+    low_overlap_interval_count = sum(1 for metric in metrics if metric["low_overlap_flag"])
+    low_quality_interval_count = sum(1 for metric in metrics if metric["low_quality_flag"])
+    mean_quality_score = _mean([metric["quality_score"] for metric in metrics])
+    mean_participation = _mean([metric["source_participation_score"] for metric in metrics])
+    mean_overlap = _mean([metric["overlap_confidence"] for metric in metrics])
+    effective_observation_count = sum(metric["effective_observation_count"] for metric in metrics)
+    effective_coverage_ratio = _mean([metric["effective_coverage_ratio"] for metric in metrics])
+    source_reliability_band = _source_reliability_band(mean_quality_score, mean_participation)
+    overlap_quality_band = _overlap_quality_band(mean_overlap)
+    gap_burden_ratio = _ratio(gap_heavy_interval_count, interval_count)
+    gap_burden_band = _gap_burden_band(gap_burden_ratio)
+    ready_interval_ratio = _ratio(ready_interval_count, interval_count)
+    readiness_band = _readiness_band(
+        effective_coverage_ratio=effective_coverage_ratio,
+        ready_interval_ratio=ready_interval_ratio,
+        source_reliability_band=source_reliability_band,
+        gap_burden_ratio=gap_burden_ratio,
+    )
+
+    available_window_count = interval_count if eligible_anchor_count is not None else None
+    missing_window_count = (
+        max(eligible_anchor_count - interval_count, 0) if eligible_anchor_count is not None else None
+    )
+    available_window_ratio = (
+        _ratio(available_window_count or 0, eligible_anchor_count)
+        if eligible_anchor_count is not None
+        else None
+    )
+    full_window_ratio = (
+        _ratio(sum(1 for metric in metrics if metric["window_full_flag"]), interval_count)
+        if eligible_anchor_count is not None
+        else None
+    )
+    partial_window_ratio = (
+        _ratio(sum(1 for metric in metrics if metric["window_partial_flag"]), interval_count)
+        if eligible_anchor_count is not None
+        else None
+    )
+
+    return StateReadinessSummary(
+        interval_count=interval_count,
+        effective_observation_count=effective_observation_count,
+        effective_coverage_ratio=effective_coverage_ratio,
+        ready_interval_count=ready_interval_count,
+        ready_interval_ratio=ready_interval_ratio,
+        gap_heavy_interval_count=gap_heavy_interval_count,
+        gap_heavy_interval_ratio=gap_burden_ratio,
+        low_overlap_interval_ratio=_ratio(low_overlap_interval_count, interval_count),
+        low_quality_interval_ratio=_ratio(low_quality_interval_count, interval_count),
+        source_reliability_band=source_reliability_band,
+        overlap_quality_band=overlap_quality_band,
+        gap_burden_band=gap_burden_band,
+        readiness_band=readiness_band,
+        eligible_anchor_count=eligible_anchor_count,
+        available_window_count=available_window_count,
+        missing_window_count=missing_window_count,
+        available_window_ratio=available_window_ratio,
+        full_window_ratio=full_window_ratio,
+        partial_window_ratio=partial_window_ratio,
+    )
+
+
+def build_state_interval_readiness_rollups(
+    state_df: pl.DataFrame,
+    *,
+    clock: str,
+    interval_kind: str,
+) -> list[StateIntervalReadinessSummary]:
+    """Build daily or session-scoped readiness rollups from a state frame."""
+    if interval_kind not in {"day", "session"}:
+        raise ValueError("interval_kind must be 'day' or 'session'")
+
+    metrics = _row_readiness_metrics(state_df, clock=clock)
+    if not metrics:
+        return []
+
+    grouped: dict[tuple[str, dt.date | None, str | None], list[dict[str, float | int | bool | str | dt.datetime | dt.date | None]]] = {}
+    for metric in metrics:
+        metric_date = metric["date"]
+        metric_session = metric["session_code"]
+        if interval_kind == "day":
+            key = (str(metric_date), metric_date, None)
+        else:
+            key = (f"{metric_date.isoformat()}:{metric_session}", metric_date, metric_session)
+        grouped.setdefault(key, []).append(metric)
+
+    rollups: list[StateIntervalReadinessSummary] = []
+    for interval_key, values in sorted(grouped.items(), key=lambda item: item[0][0]):
+        key_value, date_value, session_value = interval_key
+        interval_count = len(values)
+        gap_heavy_count = sum(1 for value in values if value["gap_heavy_flag"])
+        ready_count = sum(1 for value in values if value["ready_flag"])
+        effective_coverage_ratio = _mean([float(value["effective_coverage_ratio"]) for value in values])
+        mean_quality_score = _mean([float(value["quality_score"]) for value in values])
+        mean_source_quality_hint = _mean_optional([float(value["source_quality_hint"]) for value in values])
+        mean_source_participation = _mean_optional([float(value["source_participation_score"]) for value in values])
+        mean_overlap = _mean_optional([float(value["overlap_confidence"]) for value in values])
+        source_band = _source_reliability_band(mean_quality_score, mean_source_participation or 0.0)
+        overlap_band = _overlap_quality_band(mean_overlap or 0.0)
+        gap_burden_ratio = _ratio(gap_heavy_count, interval_count)
+        gap_burden_band = _gap_burden_band(gap_burden_ratio)
+        ready_ratio = _ratio(ready_count, interval_count)
+
+        rollups.append(
+            StateIntervalReadinessSummary(
+                interval_kind=interval_kind,
+                interval_key=key_value,
+                date=date_value,
+                session_code=session_value,
+                interval_count=interval_count,
+                effective_coverage_ratio=effective_coverage_ratio,
+                filled_ratio=_mean([float(value["filled_ratio"]) for value in values]),
+                gap_burden_ratio=gap_burden_ratio,
+                mean_quality_score=mean_quality_score,
+                mean_source_quality_hint=mean_source_quality_hint,
+                mean_source_participation_score=mean_source_participation,
+                mean_overlap_confidence=mean_overlap,
+                ready_interval_count=ready_count,
+                ready_interval_ratio=ready_ratio,
+                gap_heavy_interval_count=gap_heavy_count,
+                source_reliability_band=source_band,
+                overlap_quality_band=overlap_band,
+                gap_burden_band=gap_burden_band,
+                readiness_band=_readiness_band(
+                    effective_coverage_ratio=effective_coverage_ratio,
+                    ready_interval_ratio=ready_ratio,
+                    source_reliability_band=source_band,
+                    gap_burden_ratio=gap_burden_ratio,
+                ),
+            )
+        )
+    return rollups
 
 
 def _filled_flags(state_df: pl.DataFrame) -> list[bool]:
@@ -337,3 +511,195 @@ def _percentile(values: list[int], q: float) -> float:
     series = pl.Series("values", values)
     quantile = series.quantile(q)
     return float(quantile) if quantile is not None else 0.0
+
+
+def _row_readiness_metrics(
+    state_df: pl.DataFrame,
+    *,
+    clock: str,
+) -> list[dict[str, float | int | bool | str | dt.date | None]]:
+    if state_df.is_empty():
+        return []
+
+    resolution_ms = state_resolution_ms(clock)
+    metrics: list[dict[str, float | int | bool | str | dt.date | None]] = []
+    for row in state_df.to_dicts():
+        timestamp = _timestamp_from_row(row)
+        metric_date = timestamp.date()
+        session = _session_code_from_row(row, timestamp)
+        is_window = "window_id" in row or "anchor_ts_utc" in row
+
+        if is_window:
+            row_count = max(int(row.get("row_count", 0) or 0), 0)
+            expected_row_count = max(int(row.get("expected_row_count", row_count or 1) or 1), 1)
+            filled_row_count = max(int(row.get("filled_row_count", 0) or 0), 0)
+            completeness = max(0.0, min(float(row.get("completeness", 0.0) or 0.0), 1.0))
+            effective_observation_count = max(row_count - filled_row_count, 0)
+            effective_coverage_ratio = max(0.0, min(effective_observation_count / expected_row_count, 1.0))
+            quality_score = _coalesce_numeric(row, "source_quality_hint_mean", "quality_score_mean")
+            participation = _coalesce_numeric(
+                row,
+                "source_participation_score_mean",
+                default=_fallback_participation_from_source_count(row.get("source_count_mean"), quality_score),
+            )
+            overlap = _coalesce_numeric(row, "overlap_confidence_mean", default=0.0)
+            filled_ratio = max(0.0, min(float(row.get("filled_ratio", 0.0) or 0.0), 1.0))
+            gap_count = max(int(row.get("gap_count", 0) or 0), 0)
+            max_gap_ms = max(int(row.get("max_gap_ms", 0) or 0), 0)
+            warmup_satisfied = bool(row.get("warmup_satisfied", False))
+            gap_heavy_flag = filled_ratio > 0.15 or gap_count > 1 or max_gap_ms > (resolution_ms * 5)
+            ready_flag = (
+                warmup_satisfied
+                and completeness >= 0.90
+                and effective_coverage_ratio >= 0.85
+                and quality_score >= 60.0
+                and participation >= 0.20
+                and not gap_heavy_flag
+            )
+            window_full_flag = warmup_satisfied and completeness >= 0.999
+            window_partial_flag = not window_full_flag
+        else:
+            filled_flag = bool(row.get("gap_fill_flag", False))
+            completeness = max(0.0, min(float(row.get("window_completeness", 1.0) or 0.0), 1.0))
+            effective_observation_count = 0 if filled_flag else 1
+            effective_coverage_ratio = 0.0 if filled_flag else completeness
+            quality_score = _coalesce_numeric(row, "source_quality_hint", "quality_score")
+            participation = _coalesce_numeric(
+                row,
+                "source_participation_score",
+                default=_fallback_participation_from_source_count(row.get("source_count"), quality_score),
+            )
+            overlap = _coalesce_numeric(row, "overlap_confidence_hint", default=0.0)
+            observed_interval_ms = max(
+                int(row.get("observed_interval_ms", row.get("primary_staleness_ms", 0)) or 0),
+                0,
+            )
+            expected_interval_ms = max(int(row.get("expected_interval_ms", resolution_ms) or resolution_ms), 1)
+            filled_ratio = 1.0 if filled_flag else 0.0
+            gap_heavy_flag = filled_flag or observed_interval_ms > (expected_interval_ms * 5)
+            gap_count = 1 if gap_heavy_flag else 0
+            max_gap_ms = observed_interval_ms if gap_heavy_flag else 0
+            ready_flag = (
+                effective_coverage_ratio >= 0.85
+                and quality_score >= 60.0
+                and participation >= 0.20
+                and not gap_heavy_flag
+            )
+            window_full_flag = False
+            window_partial_flag = False
+
+        metrics.append(
+            {
+                "date": metric_date,
+                "session_code": session,
+                "effective_observation_count": effective_observation_count,
+                "effective_coverage_ratio": effective_coverage_ratio,
+                "quality_score": quality_score,
+                "source_quality_hint": quality_score,
+                "source_participation_score": participation,
+                "overlap_confidence": overlap,
+                "filled_ratio": filled_ratio,
+                "gap_heavy_flag": gap_heavy_flag,
+                "gap_count": gap_count,
+                "max_gap_ms": max_gap_ms,
+                "ready_flag": ready_flag,
+                "low_overlap_flag": overlap < 0.15,
+                "low_quality_flag": quality_score < 60.0,
+                "window_full_flag": window_full_flag,
+                "window_partial_flag": window_partial_flag,
+            }
+        )
+    return metrics
+
+
+def _timestamp_from_row(row: dict[str, object]) -> dt.datetime:
+    timestamp = row.get("ts_utc", row.get("anchor_ts_utc"))
+    if not isinstance(timestamp, dt.datetime):
+        raise TypeError("State readiness metrics require ts_utc or anchor_ts_utc datetimes")
+    return timestamp
+
+
+def _session_code_from_row(row: dict[str, object], timestamp: dt.datetime) -> str:
+    session = row.get("session_code")
+    if isinstance(session, str) and session:
+        return session
+    return _session_code_from_timestamp(timestamp)
+
+
+def _session_code_from_timestamp(timestamp: dt.datetime) -> str:
+    if timestamp.weekday() == 5 or (timestamp.weekday() == 4 and timestamp.hour >= 22) or (
+        timestamp.weekday() == 6 and timestamp.hour < 22
+    ):
+        return "weekend_closed"
+    hour = timestamp.hour
+    if 13 <= hour < 16:
+        return "overlap"
+    if 13 <= hour < 22:
+        return "ny"
+    if 7 <= hour < 16:
+        return "london"
+    if 0 <= hour < 8:
+        return "asia"
+    return "other"
+
+
+def _coalesce_numeric(
+    row: dict[str, object],
+    *columns: str,
+    default: float = 0.0,
+) -> float:
+    for column in columns:
+        value = row.get(column)
+        if value is not None:
+            return float(value)
+    return float(default)
+
+
+def _fallback_participation_from_source_count(source_count: object, quality_score: float) -> float:
+    if source_count is None:
+        return max(0.0, min(quality_score / 100.0, 1.0)) * 0.25
+    normalized = max(0.0, min(float(source_count) / 2.0, 1.0))
+    return max(0.0, min(normalized * max(0.0, min(quality_score / 100.0, 1.0)), 1.0))
+
+
+def _source_reliability_band(mean_quality_score: float, mean_participation_score: float) -> str:
+    if mean_quality_score >= 80.0 and mean_participation_score >= 0.50:
+        return "high"
+    if mean_quality_score >= 65.0 and mean_participation_score >= 0.25:
+        return "medium"
+    return "low"
+
+
+def _overlap_quality_band(mean_overlap_confidence: float) -> str:
+    if mean_overlap_confidence >= 0.50:
+        return "high"
+    if mean_overlap_confidence >= 0.15:
+        return "medium"
+    return "low"
+
+
+def _gap_burden_band(gap_burden_ratio: float) -> str:
+    if gap_burden_ratio <= 0.05:
+        return "low"
+    if gap_burden_ratio <= 0.15:
+        return "medium"
+    return "high"
+
+
+def _readiness_band(
+    *,
+    effective_coverage_ratio: float,
+    ready_interval_ratio: float,
+    source_reliability_band: str,
+    gap_burden_ratio: float,
+) -> str:
+    if (
+        effective_coverage_ratio >= 0.85
+        and ready_interval_ratio >= 0.80
+        and source_reliability_band != "low"
+        and gap_burden_ratio <= 0.15
+    ):
+        return "ready"
+    if effective_coverage_ratio >= 0.70 and ready_interval_ratio >= 0.55:
+        return "limited"
+    return "not_ready"

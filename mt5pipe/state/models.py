@@ -198,10 +198,132 @@ class StateSourceQualitySummary(BaseModel):
         return self
 
 
+class StateReadinessSummary(BaseModel):
+    """Range-level training-readiness summary for state or state-window artifacts."""
+
+    interval_count: int
+    effective_observation_count: int
+    effective_coverage_ratio: float
+    ready_interval_count: int
+    ready_interval_ratio: float
+    gap_heavy_interval_count: int
+    gap_heavy_interval_ratio: float
+    low_overlap_interval_ratio: float
+    low_quality_interval_ratio: float
+    source_reliability_band: Literal["low", "medium", "high"]
+    overlap_quality_band: Literal["low", "medium", "high"]
+    gap_burden_band: Literal["low", "medium", "high"]
+    readiness_band: Literal["not_ready", "limited", "ready"]
+    eligible_anchor_count: int | None = None
+    available_window_count: int | None = None
+    missing_window_count: int | None = None
+    available_window_ratio: float | None = None
+    full_window_ratio: float | None = None
+    partial_window_ratio: float | None = None
+
+    @model_validator(mode="after")
+    def validate_summary(self) -> "StateReadinessSummary":
+        if self.interval_count < 0:
+            raise ValueError("interval_count must be >= 0")
+        if self.effective_observation_count < 0:
+            raise ValueError("effective_observation_count must be >= 0")
+        if self.ready_interval_count < 0:
+            raise ValueError("ready_interval_count must be >= 0")
+        if self.gap_heavy_interval_count < 0:
+            raise ValueError("gap_heavy_interval_count must be >= 0")
+        if self.ready_interval_count > self.interval_count:
+            raise ValueError("ready_interval_count must be <= interval_count")
+        if self.gap_heavy_interval_count > self.interval_count:
+            raise ValueError("gap_heavy_interval_count must be <= interval_count")
+        for field_name in (
+            "effective_coverage_ratio",
+            "ready_interval_ratio",
+            "gap_heavy_interval_ratio",
+            "low_overlap_interval_ratio",
+            "low_quality_interval_ratio",
+            "available_window_ratio",
+            "full_window_ratio",
+            "partial_window_ratio",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and not (0.0 <= value <= 1.0):
+                raise ValueError(f"{field_name} must be within [0, 1]")
+        if self.eligible_anchor_count is not None and self.eligible_anchor_count < 0:
+            raise ValueError("eligible_anchor_count must be >= 0")
+        if self.available_window_count is not None and self.available_window_count < 0:
+            raise ValueError("available_window_count must be >= 0")
+        if self.missing_window_count is not None and self.missing_window_count < 0:
+            raise ValueError("missing_window_count must be >= 0")
+        if self.eligible_anchor_count is not None and self.available_window_count is not None:
+            if self.available_window_count > self.eligible_anchor_count:
+                raise ValueError("available_window_count must be <= eligible_anchor_count")
+        if self.eligible_anchor_count is not None and self.missing_window_count is not None:
+            if self.missing_window_count > self.eligible_anchor_count:
+                raise ValueError("missing_window_count must be <= eligible_anchor_count")
+        return self
+
+
+class StateIntervalReadinessSummary(BaseModel):
+    """Daily or session-scoped readiness rollup for a state artifact."""
+
+    interval_kind: Literal["day", "session"]
+    interval_key: str
+    date: dt.date | None = None
+    session_code: Literal["asia", "london", "ny", "overlap", "weekend_closed", "other"] | None = None
+    interval_count: int
+    effective_coverage_ratio: float
+    filled_ratio: float
+    gap_burden_ratio: float
+    mean_quality_score: float
+    mean_source_quality_hint: float | None = None
+    mean_source_participation_score: float | None = None
+    mean_overlap_confidence: float | None = None
+    ready_interval_count: int
+    ready_interval_ratio: float
+    gap_heavy_interval_count: int
+    source_reliability_band: Literal["low", "medium", "high"]
+    overlap_quality_band: Literal["low", "medium", "high"]
+    gap_burden_band: Literal["low", "medium", "high"]
+    readiness_band: Literal["not_ready", "limited", "ready"]
+
+    @model_validator(mode="after")
+    def validate_rollup(self) -> "StateIntervalReadinessSummary":
+        if not self.interval_key:
+            raise ValueError("interval_key must not be empty")
+        if self.interval_count < 0:
+            raise ValueError("interval_count must be >= 0")
+        if self.ready_interval_count < 0:
+            raise ValueError("ready_interval_count must be >= 0")
+        if self.gap_heavy_interval_count < 0:
+            raise ValueError("gap_heavy_interval_count must be >= 0")
+        if self.ready_interval_count > self.interval_count:
+            raise ValueError("ready_interval_count must be <= interval_count")
+        if self.gap_heavy_interval_count > self.interval_count:
+            raise ValueError("gap_heavy_interval_count must be <= interval_count")
+        for field_name in (
+            "effective_coverage_ratio",
+            "filled_ratio",
+            "gap_burden_ratio",
+            "ready_interval_ratio",
+        ):
+            value = getattr(self, field_name)
+            if not (0.0 <= value <= 1.0):
+                raise ValueError(f"{field_name} must be within [0, 1]")
+        if not (0.0 <= self.mean_quality_score <= 100.0):
+            raise ValueError("mean_quality_score must be within [0, 100]")
+        if self.mean_source_quality_hint is not None and not (0.0 <= self.mean_source_quality_hint <= 100.0):
+            raise ValueError("mean_source_quality_hint must be within [0, 100]")
+        if self.mean_source_participation_score is not None and not (0.0 <= self.mean_source_participation_score <= 1.0):
+            raise ValueError("mean_source_participation_score must be within [0, 1]")
+        if self.mean_overlap_confidence is not None and not (0.0 <= self.mean_overlap_confidence <= 1.0):
+            raise ValueError("mean_overlap_confidence must be within [0, 1]")
+        return self
+
+
 class StateArtifactManifest(BaseModel):
     """State-sector artifact manifest with compiler-compatible core fields."""
 
-    schema_version: str = Field(default="1.0.0")
+    schema_version: str = Field(default="1.1.0")
     manifest_id: str
     artifact_id: str
     artifact_kind: Literal["state", "state_window"]
@@ -228,6 +350,9 @@ class StateArtifactManifest(BaseModel):
     time_range_end_utc: dt.datetime | None = None
     coverage_summary: StateCoverageSummary | None = None
     source_quality_summary: StateSourceQualitySummary | None = None
+    readiness_summary: StateReadinessSummary | None = None
+    daily_readiness_rollups: list[StateIntervalReadinessSummary] = Field(default_factory=list)
+    session_readiness_rollups: list[StateIntervalReadinessSummary] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")

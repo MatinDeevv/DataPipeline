@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Literal
+from typing import Any
 
-from mt5pipe.compiler.models import ArtifactStatus
+from mt5pipe.compiler.models import ArtifactKind, ArtifactStatus
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class BuildRunRecord(BaseModel):
@@ -23,7 +23,7 @@ class BuildRunRecord(BaseModel):
 
 class ArtifactRecord(BaseModel):
     artifact_id: str
-    artifact_kind: Literal["state", "feature_view", "label_view", "dataset"]
+    artifact_kind: ArtifactKind
     logical_name: str
     logical_version: str
     artifact_uri: str
@@ -55,3 +55,17 @@ class ArtifactStatusEventRecord(BaseModel):
     status: ArtifactStatus
     created_at: dt.datetime
     detail: str = ""
+
+
+class TrainingRunRecord(BaseModel):
+    run_id: str
+    experiment_spec_key: str
+    dataset_artifact_id: str
+    status: str
+    code_version: str
+    started_at: dt.datetime
+    finished_at: dt.datetime | None = None
+    error_message: str = ""
+    experiment_artifact_id: str | None = None
+    model_artifact_id: str | None = None
+    summary: dict[str, Any] = Field(default_factory=dict)

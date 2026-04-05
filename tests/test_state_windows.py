@@ -11,6 +11,8 @@ from mt5pipe.contracts.state import StateWindowRequest, TickArtifactRef
 from mt5pipe.state.public import (
     StateArtifactRef,
     StateCoverageSummary,
+    StateIntervalReadinessSummary,
+    StateReadinessSummary,
     StateService,
     StateSnapshot,
     StateSourceQualitySummary,
@@ -108,7 +110,7 @@ def test_tick_state_materialization_builds_disagreement_and_staleness(paths, sto
 
     result = service.materialize_tick_state(symbol="XAUUSD", date_from=start.date(), date_to=start.date())
 
-    assert result.ref.clock == "tick"
+    assert result.ref.clock == "TICK"
     assert result.state_df.height == 4
     assert result.state_df["primary_staleness_ms"].to_list() == [0, 10_000, 10_000, 10_000]
     assert result.state_df["disagreement_bps"].drop_nulls().len() == 4
@@ -119,7 +121,7 @@ def test_tick_state_materialization_builds_disagreement_and_staleness(paths, sto
 
     loaded = load_state_artifact(paths, store, result.ref)
     assert loaded.height == 4
-    assert loaded["clock"].unique().to_list() == ["tick"]
+    assert loaded["clock"].unique().to_list() == ["TICK"]
 
 
 def test_state_window_materialization_is_pit_safe_and_persisted(paths, store) -> None:
@@ -197,9 +199,14 @@ def test_state_manifest_contains_coverage_and_source_quality_metadata(paths, sto
     manifest = result.manifest
     assert isinstance(manifest.coverage_summary, StateCoverageSummary)
     assert isinstance(manifest.source_quality_summary, StateSourceQualitySummary)
+    assert isinstance(manifest.readiness_summary, StateReadinessSummary)
+    assert all(isinstance(rollup, StateIntervalReadinessSummary) for rollup in manifest.daily_readiness_rollups)
+    assert all(isinstance(rollup, StateIntervalReadinessSummary) for rollup in manifest.session_readiness_rollups)
     assert manifest.coverage_summary.filled_row_count == 1
     assert manifest.coverage_summary.gap_count == 1
     assert manifest.source_quality_summary.mean_source_count < 2.0
+    assert manifest.readiness_summary.readiness_band in {"limited", "ready"}
+    assert manifest.readiness_summary.source_reliability_band in {"medium", "high"}
     assert manifest.clock == "M1"
     assert manifest.symbol == "XAUUSD"
     assert manifest.time_range_start_utc == result.coverage_summary.time_range_start_utc
@@ -351,6 +358,59 @@ def test_state_window_materialization_is_deterministic_for_repeated_requests(pat
     assert first.window_df.equals(second.window_df)
     loaded = load_state_window_artifact(paths, store, second.ref)
     assert loaded.height == second.window_df.height
+    assert second.readiness_summary.available_window_count == second.window_df.height
+    assert second.readiness_summary.available_window_ratio == 1.0
+
+
+def test_state_window_readiness_rollups_capture_wider_range_completeness(paths, store) -> None:
+    service = StateService(paths, store)
+    start = dt.datetime(2026, 4, 1, 23, 56, tzinfo=UTC)
+    bars = _bars(start, 12)
+    bars = bars.filter(
+        ~pl.col("time_utc").is_in(
+            [
+                start + dt.timedelta(minutes=2),
+                start + dt.timedelta(minutes=7),
+            ]
+        )
+    )
+    for day in sorted({ts.date() for ts in bars["time_utc"].to_list()}):
+        day_df = bars.filter(pl.col("time_utc").dt.date() == day)
+        store.write(day_df, paths.built_bars_file("XAUUSD", "M1", day))
+
+    state_result = service.materialize_state(
+        symbol="xauusd",
+        clock="m1",
+        state_version_ref="state.default@1.0.0",
+        date_from=dt.date(2026, 4, 1),
+        date_to=dt.date(2026, 4, 2),
+        build_id="state.test.rollups",
+        dataset_spec_ref="dataset.test@1.0.0",
+        code_version="workspace-local-no-git",
+        merge_config_ref="merge.default@test",
+    )
+    window_result = materialize_state_windows(
+        paths,
+        store,
+        state_result.ref,
+        request=StateWindowRequest(
+            symbol="xauusd",
+            clock="m1",
+            state_version="state.default@1.0.0",
+            date_from=dt.date(2026, 4, 2),
+            date_to=dt.date(2026, 4, 2),
+            window_sizes=["5m"],
+            include_partial_windows=False,
+        ),
+    )["5m"]
+
+    assert window_result.readiness_summary.available_window_ratio is not None
+    assert window_result.readiness_summary.available_window_ratio == 1.0
+    assert window_result.readiness_summary.gap_heavy_interval_count > 0
+    assert window_result.readiness_summary.gap_burden_band in {"medium", "high"}
+    assert len(window_result.daily_readiness_rollups) == 1
+    assert all(rollup.interval_kind == "session" for rollup in window_result.session_readiness_rollups)
+    assert any(rollup.gap_heavy_interval_count > 0 for rollup in window_result.session_readiness_rollups)
 
 
 def test_state_window_materialization_rejects_request_outside_source_range(paths, store) -> None:
@@ -396,6 +456,8 @@ def test_state_public_boundary_exports_are_available() -> None:
     assert StateSnapshot is not None
     assert StateArtifactRef is not None
     assert StateCoverageSummary is not None
+    assert StateIntervalReadinessSummary is not None
+    assert StateReadinessSummary is not None
     assert StateWindowArtifactRef is not None
     assert StateWindowRecord is not None
     assert StateService is not None

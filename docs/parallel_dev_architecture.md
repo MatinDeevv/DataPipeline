@@ -30,7 +30,8 @@ The top-level package is `mt5pipe/`. In architecture discussions, "pipeline" map
 - **Public surface:** registry helpers, artifact ref/load helpers, and stable family builders are re-exported from `mt5pipe.features.public` and `mt5pipe.labels.public`
 - **Stable machine-native families:** `disagreement/*`, `event_shape/*`, `entropy/*`, `multiscale/*`
 - **Stable selector cleanup:** stable `htf_context/*` excludes higher-timeframe `*_tick_count` columns; stable `disagreement/*` is limited to `mid_divergence_proxy_bps`, `disagreement_pressure_bps`, `disagreement_zscore_60`, and `disagreement_burst_15`
-- **Label artifact note:** label manifests include compact horizon/class-balance diagnostics plus explicit horizon span, recommended embargo floor, and `constant_output_columns`; insufficient forward-horizon triple-barrier rows are explicitly null
+- **Experiment metadata note:** stable feature specs carry `ablation_group` and `trainability_tags`; stable label packs carry `qa_policy_ref`, `ablation_group`, `trainability_tags`, `target_groups`, and `tail_policy`
+- **Artifact diagnostics note:** feature manifests include `metadata.trainability_diagnostics` with post-warmup coverage/stability summaries, and label manifests include richer `metadata.label_diagnostics` with target-distribution summaries, degenerate-horizon warnings, explicit embargo/tail policy, and `constant_output_columns`; insufficient forward-horizon triple-barrier rows are explicitly null
 
 ### Agent 3 — Compiler
 - **Owns:** `mt5pipe/compiler/`, `mt5pipe/truth/`, `mt5pipe/catalog/`
@@ -39,6 +40,8 @@ The top-level package is `mt5pipe/`. In architecture discussions, "pipeline" map
 - **Responsibility:** Dataset compilation, truth gate, artifact catalog, CLI integration
 - **Public surface:** `DatasetSpec` supports version refs plus explicit artifact refs, and `mt5pipe.compiler.public` re-exports compile/inspect/diff helpers for deterministic dataset artifact workflows
 - **Truth/CLI note:** Trust reports now carry `score_breakdown`, `decision_summary`, `warning_reasons`, `rejection_reasons`, and `check_status_counts`; `compile-dataset`, `inspect-dataset`, and `diff-dataset` surface those fields directly for research use
+- **Phase 5 training note:** `mt5pipe.compiler.public` also re-exports `ExperimentSpec`, `run_experiment_spec`, `inspect_experiment`, and `inspect_model`. Experiment/model artifacts live under compact experiment/model storage roots, are cataloged through the same manifest system as datasets, and are only trainable from dataset artifacts whose trust reports are accepted.
+- **Experiment workflow:** the first institutional path is `config/experiments/xau_m1_nonhuman_direction_nb_v1.yaml`, which trains `gaussian_nb_binary@1.0.0` on `dataset://xau_m1_nonhuman@1.0.0` using walk-forward-plus-holdout evaluation and registers both `experiment://...` and `model://...` aliases.
 
 ---
 

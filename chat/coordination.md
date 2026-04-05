@@ -164,6 +164,17 @@ summary: Cleaned the stable selector surface for the nonhuman path without chang
 needs: Agent 3 can keep using time/session/quality/htf_context/disagreement/event_shape/entropy/multiscale selectors as stable. Do not expect HTF tick-count columns in stable feature artifacts, and treat label manifest metadata.label_diagnostics.constant_output_columns as the source of truth for slice-trivial labels.
 files: mt5pipe/features/registry/defaults.py, mt5pipe/features/disagreement/builders.py, mt5pipe/features/event_shape/builders.py, mt5pipe/labels/service.py, tests/test_features_phase3.py, tests/test_features_phase4.py
 ```
+
+### [2026-04-05 00:05] Agent 2 - Phase 5 trainability metadata handoff
+
+```
+agent: agent_2
+type: handoff
+area: features
+summary: Added experiment-readiness metadata without expanding the family surface. Stable FeatureSpec entries now expose ablation_group/trainability_tags, stable LabelPack entries now expose qa_policy_ref/ablation_group/trainability_tags/target_groups/tail_policy, feature-view manifests publish post-warmup trainability diagnostics, and label-view manifests publish target-distribution and degenerate-horizon diagnostics.
+needs: Agent 3 can treat feature manifest metadata.trainability_diagnostics and label metadata.label_diagnostics as stable inspection surfaces. core_tb_volscaled@1.0.0 still has the same key/output columns, but label service now honors parameters.direction_threshold_bps if a future pack opts into thresholded direction targets.
+files: mt5pipe/features/registry/models.py, mt5pipe/features/registry/defaults.py, mt5pipe/features/service.py, mt5pipe/labels/registry/models.py, mt5pipe/labels/registry/defaults.py, mt5pipe/labels/service.py, tests/test_features_phase5.py
+```
 ### [2026-04-04 23:32] Agent 1 - Phase 4 cleanup state quality handoff
 
 ```
@@ -173,4 +184,27 @@ area: state
 summary: Fixed the main avoidable state-side quality issue on the current nonhuman range. Persisted state/state-window artifacts are now rewritten idempotently and loaders deduplicate stable keys, while bar-backed state quality now uses canonical tick quality/conflict/dual-source evidence when available instead of only coarse bar heuristics.
 needs: Agent 3 should note one external blocker remains outside state ownership: the current full compiler suite still trips in mt5pipe.truth.service on a missing _quality_caveat_summary helper. Focused state tests are green and live state materialization quality on 2024-02-26..2024-03-01 improved materially after the state cleanup.
 files: mt5pipe/state/service.py, tests/test_state_windows.py
+```
+### [2026-04-05 00:06] Agent 1 - Phase 5 readiness metadata handoff
+
+```
+agent: agent_1
+type: handoff
+area: state
+summary: Added typed range-level and interval-level readiness metadata to state artifacts without changing the service surface. State manifests/results now expose readiness_summary plus daily/session readiness rollups, and state refs/requests normalize symbol/clock casing so callers are not sensitive to xauusd vs XAUUSD or m1 vs M1.
+needs: Agent 2 can consume manifest.readiness_summary and per-day-session rollups from mt5pipe.state.public when deciding which intervals are gap-heavy or low-overlap. Agent 3 can use the same summaries for truth/training-readiness reasoning and window-availability checks without recomputing them downstream.
+files: mt5pipe/contracts/state.py, mt5pipe/state/models.py, mt5pipe/state/public.py, mt5pipe/state/internal/quality.py, mt5pipe/state/service.py, mt5pipe/state/internal/windows.py, tests/test_contracts.py, tests/test_state_windows.py
+verification: pytest tests/test_contracts.py tests/test_state_windows.py tests/test_state_boundaries.py tests/test_schema.py -q -> 28 passed
+```
+
+### [2026-04-05 00:35] Agent 3 - Phase 5 checkpoint
+
+```
+agent: agent_3
+type: handoff
+area: compiler
+summary: The first institutional training-readiness path is now live on top of the green Dataset OS. Trusted datasets are hard-gated by truth acceptance, run-experiment writes walk-forward + holdout evaluation artifacts, experiment/model manifests are cataloged with lineage back to dataset:// refs, and train inspect-experiment / inspect-model are working on the live workspace.
+needs: Stable now: ExperimentSpec boundary, training-run registry, experiment/model alias lifecycle, compact Windows-safe experiment/model artifact storage, and the baseline gaussian_nb_binary@1.0.0 workflow on dataset://xau_m1_nonhuman@1.0.0. Still missing before institutional-scale training: richer model families, model/result diff tooling, broader experiment comparison workflows, and deeper evaluation diagnostics beyond the first balanced-accuracy baseline.
+files: mt5pipe/compiler/models.py, mt5pipe/compiler/manifest.py, mt5pipe/compiler/public.py, mt5pipe/compiler/training.py, mt5pipe/catalog/models.py, mt5pipe/catalog/sqlite.py, mt5pipe/storage/paths.py, mt5pipe/cli/train_cmds.py, mt5pipe/cli/app.py, config/experiments/xau_m1_nonhuman_direction_nb_v1.yaml, tests/test_training_flow.py
+verification: pytest tests/test_training_flow.py tests/test_compiler.py tests/test_catalog.py tests/test_dataset_cli_compat.py tests/test_boundary_imports.py -q -> 21 passed, 1 xfailed; python -m mt5pipe.cli.app train run-experiment --spec config/experiments/xau_m1_nonhuman_direction_nb_v1.yaml -> accepted experiment/model artifacts on dataset.xau_m1_nonhuman.1af51fbdf628 with walk_forward_balanced_accuracy_mean=0.5354 and holdout_balanced_accuracy=0.5096
 ```

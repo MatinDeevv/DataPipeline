@@ -28,6 +28,8 @@ class FeatureSpec(BaseModel):
     missingness_policy: Literal["fail", "allow", "drop_row", "impute_forward", "impute_zero"]
     qa_policy_ref: str
     status: Literal["draft", "stable", "deprecated"] = "draft"
+    ablation_group: str | None = None
+    trainability_tags: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
 
     @property
@@ -46,4 +48,6 @@ class FeatureSpec(BaseModel):
             raise ValueError("lookback_rows and warmup_rows must be >= 0")
         if self.warmup_rows < self.lookback_rows:
             raise ValueError("warmup_rows must be >= lookback_rows")
+        if len(set(self.trainability_tags)) != len(self.trainability_tags):
+            raise ValueError("trainability_tags must be unique")
         return self

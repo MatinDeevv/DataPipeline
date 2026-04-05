@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
@@ -122,9 +123,15 @@ class FeatureService:
                 input_partition_refs=input_partition_refs,
                 parent_artifact_refs=[state_artifact_id],
                 metadata={
+                    "family": spec.family,
+                    "status": spec.status,
+                    "ablation_group": spec.ablation_group or spec.family,
+                    "family_tags": spec.tags,
+                    "trainability_tags": spec.trainability_tags,
                     "row_count": len(feature_df),
                     "column_count": len(feature_df.columns),
                     "output_columns": spec.output_columns,
+                    "trainability_diagnostics": _feature_trainability_diagnostics(feature_df, spec),
                     "time_range_start": str(feature_df["time_utc"].min()) if not feature_df.is_empty() else "",
                     "time_range_end": str(feature_df["time_utc"].max()) if not feature_df.is_empty() else "",
                 },
@@ -264,3 +271,96 @@ def _family_builder(family: str):
         return builders[family]
     except KeyError as exc:
         raise NotImplementedError(f"Feature family '{family}' is not materialized in the feature service") from exc
+
+
+def _feature_trainability_diagnostics(feature_df: pl.DataFrame, spec: FeatureSpec) -> dict[str, Any]:
+    output_columns = [column for column in spec.output_columns if column in feature_df.columns]
+    total_rows = int(feature_df.height)
+    warmup_excluded_rows = min(max(spec.warmup_rows - 1, 0), total_rows)
+    post_warmup = feature_df.slice(warmup_excluded_rows) if warmup_excluded_rows else feature_df
+    post_warmup_rows = int(post_warmup.height)
+
+    column_summaries: dict[str, dict[str, Any]] = {}
+    constant_columns: list[str] = []
+    low_variation_columns: list[str] = []
+    null_heavy_columns: list[str] = []
+    total_non_null = 0
+
+    for column in output_columns:
+        series = post_warmup[column]
+        null_count = int(series.null_count())
+        non_null_count = post_warmup_rows - null_count
+        non_null_ratio = round(non_null_count / post_warmup_rows, 6) if post_warmup_rows else None
+        distinct_non_null = int(series.drop_nulls().n_unique()) if non_null_count > 0 else 0
+
+        is_constant = non_null_count > 0 and distinct_non_null == 1
+        is_low_variation = non_null_count > 0 and distinct_non_null <= 3
+        is_null_heavy = non_null_ratio is not None and non_null_ratio < 0.75
+
+        if is_constant:
+            constant_columns.append(column)
+        if is_low_variation and not is_constant:
+            low_variation_columns.append(column)
+        if is_null_heavy:
+            null_heavy_columns.append(column)
+
+        total_non_null += non_null_count
+        column_summaries[column] = {
+            "null_count_post_warmup": null_count,
+            "non_null_count_post_warmup": non_null_count,
+            "non_null_ratio_post_warmup": non_null_ratio,
+            "distinct_non_null_post_warmup": distinct_non_null,
+            "constant_post_warmup": is_constant,
+            "low_variation_post_warmup": is_low_variation,
+        }
+
+    complete_row_count = 0
+    if output_columns and post_warmup_rows:
+        complete_row_count = int(
+            post_warmup.select(
+                pl.all_horizontal([pl.col(column).is_not_null() for column in output_columns]).sum().alias("count")
+            )["count"][0]
+        )
+
+    complete_row_ratio = round(complete_row_count / post_warmup_rows, 6) if post_warmup_rows else None
+    family_non_null_ratio = (
+        round(total_non_null / float(post_warmup_rows * len(output_columns)), 6)
+        if post_warmup_rows and output_columns
+        else None
+    )
+
+    warnings: list[str] = []
+    if total_rows <= spec.warmup_rows:
+        warnings.append("insufficient_rows_vs_warmup")
+    if null_heavy_columns:
+        warnings.append("post_warmup_null_heavy_columns")
+    if constant_columns:
+        warnings.append("constant_columns_present")
+    if len(constant_columns) == len(output_columns) and output_columns:
+        warnings.append("family_degenerate_all_constant")
+    if low_variation_columns:
+        warnings.append("low_variation_columns_present")
+    if complete_row_ratio is not None and complete_row_ratio < 0.75:
+        warnings.append("incomplete_rows_post_warmup")
+
+    return {
+        "feature_key": spec.key,
+        "family": spec.family,
+        "status": spec.status,
+        "ablation_group": spec.ablation_group or spec.family,
+        "family_tags": spec.tags,
+        "trainability_tags": spec.trainability_tags,
+        "missingness_policy": spec.missingness_policy,
+        "warmup_rows": spec.warmup_rows,
+        "lookback_rows": spec.lookback_rows,
+        "row_count_total": total_rows,
+        "warmup_excluded_rows": warmup_excluded_rows,
+        "row_count_post_warmup": post_warmup_rows,
+        "complete_row_ratio_post_warmup": complete_row_ratio,
+        "family_non_null_ratio_post_warmup": family_non_null_ratio,
+        "constant_columns": sorted(constant_columns),
+        "low_variation_columns": sorted(low_variation_columns),
+        "null_heavy_columns": sorted(null_heavy_columns),
+        "column_summaries": column_summaries,
+        "warning_reasons": warnings,
+    }
