@@ -1,22 +1,33 @@
 """
-Shared contracts package — single source of truth for cross-sector types.
+Shared contracts package.
 
-All cross-package imports between state/features/compiler sectors
-MUST go through this package or through <sector>.public.
-
-Do NOT import sector internals from here.
+All cross-sector imports between state/features/compiler sectors
+must go through this package or through ``<sector>.public``.
 """
 
-from mt5pipe.contracts.artifacts import ArtifactRef, ArtifactKind
-from mt5pipe.contracts.dataset import DatasetId, DatasetSplitKind
-from mt5pipe.contracts.trust import TrustVerdict
+from mt5pipe.contracts.artifacts import ArtifactKind, ArtifactRef
+from mt5pipe.contracts.dataset import DATASET_JOIN_KEYS, DatasetId, DatasetSplitKind
 from mt5pipe.contracts.lineage import LineageNode
+from mt5pipe.contracts.state import (
+    StateArtifactRef,
+    StateWindowArtifactRef,
+    StateWindowRequest,
+    TickArtifactRef,
+    parse_window_size,
+)
+from mt5pipe.contracts.trust import TrustVerdict
 
 __all__ = [
-    "ArtifactRef",
     "ArtifactKind",
+    "ArtifactRef",
+    "DATASET_JOIN_KEYS",
     "DatasetId",
     "DatasetSplitKind",
-    "TrustVerdict",
     "LineageNode",
+    "StateArtifactRef",
+    "StateWindowArtifactRef",
+    "StateWindowRequest",
+    "TickArtifactRef",
+    "TrustVerdict",
+    "parse_window_size",
 ]

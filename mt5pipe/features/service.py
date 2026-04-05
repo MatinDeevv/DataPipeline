@@ -9,6 +9,8 @@ from pathlib import Path
 import polars as pl
 
 from mt5pipe.bars.builder import timeframe_to_seconds
+from mt5pipe.contracts.dataset import DATASET_JOIN_KEYS
+from mt5pipe.features.artifacts import FeatureArtifactRef
 from mt5pipe.catalog.sqlite import CatalogDB
 from mt5pipe.compiler.manifest import (
     build_stage_artifact_id,
@@ -19,22 +21,25 @@ from mt5pipe.compiler.manifest import (
 from mt5pipe.compiler.models import LineageManifest
 from mt5pipe.config.models import DatasetConfig
 from mt5pipe.features.context import add_lagged_bar_features
+from mt5pipe.features.disagreement import add_disagreement_features
+from mt5pipe.features.entropy import add_entropy_features
+from mt5pipe.features.event_shape import add_event_shape_features
 from mt5pipe.features.quality import add_spread_quality_features
+from mt5pipe.features.registry.models import FeatureSpec
 from mt5pipe.features.session import add_session_features
 from mt5pipe.features.time import add_time_features
-from mt5pipe.features.registry.models import FeatureSpec
 from mt5pipe.quality.cleaning import validate_bars
 from mt5pipe.storage.parquet_store import ParquetStore
 from mt5pipe.storage.paths import StoragePaths
 
-
-FEATURE_JOIN_KEYS = ["symbol", "timeframe", "time_utc"]
+FEATURE_JOIN_KEYS = DATASET_JOIN_KEYS
 
 
 @dataclass
 class MaterializedFeatureArtifact:
     spec: FeatureSpec
     artifact_id: str
+    artifact_ref: FeatureArtifactRef
     manifest: LineageManifest
     manifest_path: Path
     frame: pl.DataFrame
@@ -130,6 +135,11 @@ class FeatureService:
             artifacts.append(MaterializedFeatureArtifact(
                 spec=spec,
                 artifact_id=artifact_id,
+                artifact_ref=FeatureArtifactRef(
+                    artifact_id=artifact_id,
+                    feature_key=spec.key,
+                    clock=spec.output_clock,
+                ),
                 manifest=manifest,
                 manifest_path=manifest_path,
                 frame=feature_df,
@@ -147,13 +157,7 @@ class FeatureService:
         date_to: dt.date,
     ) -> pl.DataFrame:
         working = base_df.clone()
-        if spec.family == "time":
-            working = add_time_features(working)
-        elif spec.family == "session":
-            working = add_session_features(working)
-        elif spec.family == "quality":
-            working = add_spread_quality_features(working)
-        elif spec.family == "htf_context":
+        if spec.family == "htf_context":
             for htf in self._dataset_cfg.context_timeframes:
                 htf_df = self._load_bars_range(symbol, htf, date_from, date_to)
                 if htf_df.is_empty():
@@ -165,7 +169,11 @@ class FeatureService:
                     bar_duration_seconds=timeframe_to_seconds(htf),
                 )
         else:
-            raise NotImplementedError(f"Feature family '{spec.family}' is not materialized in Phase 1")
+            builder = _family_builder(spec.family)
+            builder_kwargs: dict[str, object] = {}
+            if spec.family == "event_shape":
+                builder_kwargs["bar_duration_seconds"] = timeframe_to_seconds(base_df["timeframe"][0]) if "timeframe" in base_df.columns and len(base_df) > 0 else timeframe_to_seconds(spec.input_clock)
+            working = builder(working, **builder_kwargs)
 
         working = self._apply_missingness_policy(working, spec)
         output_columns = [col for col in spec.output_columns if col in working.columns]
@@ -239,3 +247,18 @@ class FeatureService:
         for date_val in dated["_date"].unique().sort().to_list():
             day_df = dated.filter(pl.col("_date") == date_val).drop("_date")
             self._store.write(day_df, self._paths.feature_view_file(spec.key, spec.output_clock, date_val))
+
+
+def _family_builder(family: str):
+    builders = {
+        "time": add_time_features,
+        "session": add_session_features,
+        "quality": add_spread_quality_features,
+        "disagreement": add_disagreement_features,
+        "event_shape": add_event_shape_features,
+        "entropy": add_entropy_features,
+    }
+    try:
+        return builders[family]
+    except KeyError as exc:
+        raise NotImplementedError(f"Feature family '{family}' is not materialized in the feature service") from exc

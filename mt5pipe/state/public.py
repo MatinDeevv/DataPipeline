@@ -1,22 +1,40 @@
 """
-State sector — public boundary module.
+State sector public boundary.
 
-This is the ONLY module other sectors may import from the state package.
-All cross-sector consumers should import from here, never from
-``mt5pipe.state.models`` or ``mt5pipe.state.service`` directly.
-
-Re-exports
-----------
-StateSnapshot : pydantic model
-    Canonical machine-readable market state row.
-StateService : class
-    Materializes state artifacts from built bars.
+Other sectors may import from here, but not from ``mt5pipe.state`` internals.
 """
 
-from mt5pipe.state.models import StateSnapshot
-from mt5pipe.state.service import StateService
+from mt5pipe.contracts.state import (
+    StateArtifactRef,
+    StateWindowArtifactRef,
+    StateWindowRequest,
+    TickArtifactRef,
+    parse_window_size,
+)
+from mt5pipe.state.models import StateArtifactManifest, StateSnapshot, StateWindowRecord
+from mt5pipe.state.service import (
+    StateMaterializationResult,
+    StateService,
+    StateWindowMaterializationResult,
+    load_state_artifact,
+    materialize_state_windows,
+)
+
+StateBuilder = StateService
 
 __all__ = [
-    "StateSnapshot",
+    "StateArtifactManifest",
+    "StateArtifactRef",
+    "StateBuilder",
+    "StateMaterializationResult",
     "StateService",
+    "StateSnapshot",
+    "StateWindowArtifactRef",
+    "StateWindowMaterializationResult",
+    "StateWindowRecord",
+    "StateWindowRequest",
+    "TickArtifactRef",
+    "load_state_artifact",
+    "materialize_state_windows",
+    "parse_window_size",
 ]

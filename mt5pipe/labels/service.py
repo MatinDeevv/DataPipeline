@@ -8,6 +8,8 @@ from pathlib import Path
 
 import polars as pl
 
+from mt5pipe.contracts.dataset import DATASET_JOIN_KEYS
+from mt5pipe.labels.artifacts import LabelArtifactRef
 from mt5pipe.catalog.sqlite import CatalogDB
 from mt5pipe.compiler.manifest import (
     build_stage_artifact_id,
@@ -25,13 +27,13 @@ from mt5pipe.labels.registry.models import LabelPack
 from mt5pipe.storage.parquet_store import ParquetStore
 from mt5pipe.storage.paths import StoragePaths
 
-
-LABEL_JOIN_KEYS = ["symbol", "timeframe", "time_utc"]
+LABEL_JOIN_KEYS = DATASET_JOIN_KEYS
 
 
 @dataclass
 class LabelMaterializationResult:
     artifact_id: str
+    artifact_ref: LabelArtifactRef
     manifest: LineageManifest
     manifest_path: Path
     label_df: pl.DataFrame
@@ -115,6 +117,11 @@ class LabelService:
         self._catalog.register_artifact(manifest, str(manifest_path))
         return LabelMaterializationResult(
             artifact_id=artifact_id,
+            artifact_ref=LabelArtifactRef(
+                artifact_id=artifact_id,
+                label_pack_key=label_pack.key,
+                clock=label_pack.base_clock,
+            ),
             manifest=manifest,
             manifest_path=manifest_path,
             label_df=label_df,

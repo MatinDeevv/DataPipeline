@@ -126,18 +126,52 @@ class StoragePaths:
         return self.merge_qa_dir(symbol, date) / f"part-{part:05d}.parquet"
 
     # --- State artifacts ---
-    def state_dir(self, symbol: str, clock: str, date: dt.date, state_version: str) -> Path:
+    def state_root(self, symbol: str, clock: str, state_version: str) -> Path:
         return (
             self.root
             / "state"
             / f"symbol={symbol}"
             / f"clock={clock}"
             / f"state_version={state_version}"
-            / f"date={date.isoformat()}"
         )
+
+    def state_dir(self, symbol: str, clock: str, date: dt.date, state_version: str) -> Path:
+        return self.state_root(symbol, clock, state_version) / f"date={date.isoformat()}"
 
     def state_file(self, symbol: str, clock: str, date: dt.date, state_version: str, part: int = 0) -> Path:
         return self.state_dir(symbol, clock, date, state_version) / f"part-{part:05d}.parquet"
+
+    # --- Rolling state windows ---
+    def state_window_root(self, symbol: str, clock: str, state_version: str, window_size: str) -> Path:
+        return (
+            self.root
+            / "state_windows"
+            / f"symbol={symbol}"
+            / f"clock={clock}"
+            / f"state_version={state_version}"
+            / f"window={window_size}"
+        )
+
+    def state_window_dir(
+        self,
+        symbol: str,
+        clock: str,
+        date: dt.date,
+        state_version: str,
+        window_size: str,
+    ) -> Path:
+        return self.state_window_root(symbol, clock, state_version, window_size) / f"date={date.isoformat()}"
+
+    def state_window_file(
+        self,
+        symbol: str,
+        clock: str,
+        date: dt.date,
+        state_version: str,
+        window_size: str,
+        part: int = 0,
+    ) -> Path:
+        return self.state_window_dir(symbol, clock, date, state_version, window_size) / f"part-{part:05d}.parquet"
 
     # --- Feature views ---
     def feature_view_dir(self, feature_key: str, clock: str, date: dt.date) -> Path:

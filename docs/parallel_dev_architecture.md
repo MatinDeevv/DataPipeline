@@ -27,6 +27,7 @@ The top-level package is `mt5pipe/`. In architecture discussions, "pipeline" map
 - **Boundary module:** `mt5pipe/features/public.py`
 - **Tests:** `tests/test_labels.py`, feature-related tests
 - **Responsibility:** Feature builders, feature registry, label generation, label registry
+- **Public surface:** registry helpers, artifact ref/load helpers, and stable family builders are re-exported from `mt5pipe.features.public` and `mt5pipe.labels.public`
 
 ### Agent 3 — Compiler
 - **Owns:** `mt5pipe/compiler/`, `mt5pipe/truth/`, `mt5pipe/catalog/`
@@ -88,6 +89,25 @@ This is enforced by `tests/test_boundary_imports.py`.
 
 ## Coordination System
 
+### `feedbacks/latest.md`
+- **Purpose:** Highest-priority human steering note before new work begins
+- **Rule:** Every agent must read this file before starting any new task
+- **Archive:** Prior notes move to `feedbacks/archive/`
+
+### Human Feedback Flow
+
+Before starting any new work:
+1. Check whether `feedbacks/latest.md` exists and is non-empty.
+2. If it exists, read it fully before doing anything else.
+3. In your agent log, record:
+	- `feedback_read: yes`
+	- `feedback_source: feedbacks/latest.md`
+	- `feedback_summary: <1-3 lines>`
+4. Follow the latest human review unless it directly conflicts with the active task/prompt.
+5. If there is a conflict, log it in `chat/coordination.md` before proceeding.
+
+Treat `feedbacks/latest.md` as the highest-priority human steering note before new work begins.
+
 ### `chat/agent_1.md`, `chat/agent_2.md`, `chat/agent_3.md`
 - **Purpose:** Per-agent work logs: ownership declaration, plans, in-progress updates
 - **Rule:** Each agent logs their own work here; other agents may read but not overwrite
@@ -96,11 +116,13 @@ This is enforced by `tests/test_boundary_imports.py`.
 - **Purpose:** Log all public boundary changes (new exports, signature changes, schema changes)
 - **Rule:** Any change to a `public.py` or `mt5pipe/contracts/` file MUST be logged here
 - **Format:** Structured entries with agent name, module, old/new signature, impact
+- **Not for:** Human feedback notes, blockers, requests, or handoffs
 
 ### `chat/coordination.md`
 - **Purpose:** Blockers, requests, progress updates, handoffs between agents
 - **Rule:** Use this for any cross-agent communication
 - **Format:** Structured entries with agent name, type, area, summary
+- **Includes:** Human-feedback conflict logs when latest feedback conflicts with active prompt/task
 
 ---
 
@@ -161,7 +183,9 @@ The existing codebase has direct cross-sector imports that predate this boundary
 ## Workflow
 
 1. Pick your sector's files
-2. Import only from contracts + other sectors' public.py
-3. Log boundary changes in `chat/contracts.md`
-4. Post blockers/updates in `chat/coordination.md`
-5. Run `pytest tests/test_boundary_imports.py` to check violations
+2. Read `feedbacks/latest.md` first and log `feedback_read`, `feedback_source`, `feedback_summary` in your agent file
+3. If feedback conflicts with the active task/prompt, log conflict in `chat/coordination.md` before coding
+4. Import only from contracts + other sectors' public.py
+5. Log boundary changes in `chat/contracts.md`
+6. Post blockers/updates/handoffs in `chat/coordination.md`
+7. Run `pytest tests/test_boundary_imports.py` to check violations

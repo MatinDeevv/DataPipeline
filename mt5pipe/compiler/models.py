@@ -22,9 +22,12 @@ class DatasetSpec(BaseModel):
     date_from: dt.date
     date_to: dt.date
     base_clock: str
-    state_version_ref: str
+    state_version_ref: str | None = None
+    state_artifact_ref: str | None = None
     feature_selectors: list[str]
-    label_pack_ref: str
+    feature_artifact_refs: list[str] = Field(default_factory=list)
+    label_pack_ref: str | None = None
+    label_artifact_ref: str | None = None
     filters: list[str] = Field(default_factory=list)
     split_policy: Literal["temporal_holdout", "walk_forward"]
     train_ratio: float = 0.70
@@ -48,6 +51,10 @@ class DatasetSpec(BaseModel):
             raise ValueError("date_from must be <= date_to")
         if not self.feature_selectors:
             raise ValueError("feature_selectors must not be empty")
+        if not self.state_version_ref and not self.state_artifact_ref:
+            raise ValueError("either state_version_ref or state_artifact_ref is required")
+        if not self.label_pack_ref and not self.label_artifact_ref:
+            raise ValueError("either label_pack_ref or label_artifact_ref is required")
         if self.embargo_rows <= 0:
             raise ValueError("embargo_rows must be > 0")
         if self.split_policy == "temporal_holdout":

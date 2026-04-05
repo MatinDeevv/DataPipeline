@@ -15,8 +15,8 @@ from mt5pipe.catalog.models import (
     BuildRunRecord,
 )
 from mt5pipe.compiler.models import DatasetSpec, LineageManifest
-from mt5pipe.features.registry.models import FeatureSpec
-from mt5pipe.labels.registry.models import LabelPack
+from mt5pipe.features.public import FeatureSpec
+from mt5pipe.labels.public import LabelPack
 from mt5pipe.truth.models import TrustReport
 from mt5pipe.utils.time import utc_now
 
@@ -408,6 +408,12 @@ class CatalogDB:
             return None
         return FeatureSpec.model_validate_json(row["spec_json"])
 
+    def list_feature_specs(self) -> list[FeatureSpec]:
+        rows = self._conn.execute(
+            "SELECT spec_json FROM feature_specs ORDER BY feature_key ASC"
+        ).fetchall()
+        return [FeatureSpec.model_validate_json(row["spec_json"]) for row in rows]
+
     def get_label_pack(self, label_pack_key: str) -> LabelPack | None:
         row = self._conn.execute(
             "SELECT spec_json FROM label_packs WHERE label_pack_key=?",
@@ -416,6 +422,12 @@ class CatalogDB:
         if row is None:
             return None
         return LabelPack.model_validate_json(row["spec_json"])
+
+    def list_label_packs(self) -> list[LabelPack]:
+        rows = self._conn.execute(
+            "SELECT spec_json FROM label_packs ORDER BY label_pack_key ASC"
+        ).fetchall()
+        return [LabelPack.model_validate_json(row["spec_json"]) for row in rows]
 
     def get_trust_report(self, artifact_id: str) -> TrustReport | None:
         raw = self.get_trust_report_json(artifact_id)

@@ -6,10 +6,11 @@ import datetime as dt
 
 import pytest
 
+from mt5pipe.contracts import StateArtifactRef, StateWindowArtifactRef, StateWindowRequest, TickArtifactRef, parse_window_size
 from mt5pipe.compiler.models import DatasetSpec, LineageManifest
 from mt5pipe.features.registry.models import FeatureSpec
 from mt5pipe.labels.registry.models import LabelPack
-from mt5pipe.state.models import StateSnapshot
+from mt5pipe.state.models import StateSnapshot, StateWindowRecord
 from mt5pipe.truth.models import QaCheckResult, TrustReport
 
 
@@ -39,6 +40,125 @@ def test_state_snapshot_validates_core_invariants() -> None:
         provenance_refs=["canonical://XAUUSD/2026-04-01"],
     )
     assert snapshot.mid == 3000.1
+
+
+def test_state_refs_and_window_request_validate_shape() -> None:
+    tick_ref = TickArtifactRef(
+        artifact_id="canonical_tick.XAUUSD.abc123",
+        logical_name="XAUUSD",
+        version="1.0.0",
+        content_hash="abc123",
+        symbol="XAUUSD",
+        date_from=dt.date(2026, 4, 1),
+        date_to=dt.date(2026, 4, 2),
+    )
+    state_ref = StateArtifactRef(
+        artifact_id="state.XAUUSD.M1.abc123",
+        logical_name="XAUUSD.M1",
+        version="state.default@1.0.0",
+        content_hash="abc123",
+        symbol="XAUUSD",
+        clock="M1",
+        state_version="state.default@1.0.0",
+        date_from=dt.date(2026, 4, 1),
+        date_to=dt.date(2026, 4, 2),
+    )
+    window_ref = StateWindowArtifactRef(
+        artifact_id="state_window.XAUUSD.M1.5m.abc123",
+        logical_name="XAUUSD.M1.5m",
+        version="state.default@1.0.0",
+        content_hash="abc123",
+        symbol="XAUUSD",
+        clock="M1",
+        state_version="state.default@1.0.0",
+        window_size="5m",
+        date_from=dt.date(2026, 4, 1),
+        date_to=dt.date(2026, 4, 2),
+        source_artifact_id=state_ref.artifact_id,
+    )
+    request = StateWindowRequest(
+        symbol="XAUUSD",
+        clock="M1",
+        state_version="state.default@1.0.0",
+        date_from=dt.date(2026, 4, 1),
+        date_to=dt.date(2026, 4, 2),
+        window_sizes=["30s", "60s", "5m"],
+    )
+
+    assert tick_ref.kind.value == "canonical_tick"
+    assert state_ref.kind.value == "state"
+    assert window_ref.kind.value == "state_window"
+    assert parse_window_size("5m") == dt.timedelta(minutes=5)
+    assert request.window_sizes == ["30s", "60s", "5m"]
+
+
+def test_state_window_record_validates_machine_native_series_alignment() -> None:
+    anchor = dt.datetime(2026, 4, 1, 0, 5, tzinfo=UTC)
+    record = StateWindowRecord(
+        state_version="state.default@1.0.0",
+        window_id="state-window:XAUUSD:M1:5m:1",
+        symbol="XAUUSD",
+        clock="M1",
+        anchor_ts_utc=anchor,
+        anchor_ts_msc=int(anchor.timestamp() * 1000),
+        window_size="5m",
+        window_start_utc=dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC),
+        window_end_utc=anchor,
+        row_count=5,
+        expected_row_count=5,
+        missing_row_count=0,
+        completeness=1.0,
+        source_count_mean=1.8,
+        dual_source_ratio_window=0.8,
+        quality_score_mean=90.0,
+        conflict_count_window=1,
+        conflict_ratio=0.2,
+        disagreement_bps_mean=0.5,
+        staleness_ms_max=60_000,
+        mid_values=[1.0, 1.1, 1.2, 1.3, 1.4],
+        spread_values=[0.1, 0.1, 0.1, 0.1, 0.1],
+        mid_return_bps_values=[0.0, 10.0, 10.0, 10.0, 10.0],
+        source_count_values=[2, 2, 2, 1, 2],
+        quality_score_values=[90.0, 91.0, 89.0, 90.0, 90.0],
+        disagreement_bps_values=[0.4, 0.5, 0.6, None, 0.5],
+        staleness_ms_values=[0, 60_000, 60_000, 60_000, 60_000],
+        conflict_flags=[False, False, True, False, False],
+        source_offset_ms_values=[None, None, None, None, None],
+        provenance_refs=["state://XAUUSD/M1"],
+    )
+    assert record.completeness == 1.0
+
+    with pytest.raises(ValueError):
+        StateWindowRecord(
+            state_version="state.default@1.0.0",
+            window_id="state-window:XAUUSD:M1:5m:bad",
+            symbol="XAUUSD",
+            clock="M1",
+            anchor_ts_utc=anchor,
+            anchor_ts_msc=int(anchor.timestamp() * 1000),
+            window_size="5m",
+            window_start_utc=dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC),
+            window_end_utc=anchor,
+            row_count=2,
+            expected_row_count=5,
+            missing_row_count=3,
+            completeness=0.4,
+            source_count_mean=1.0,
+            dual_source_ratio_window=0.0,
+            quality_score_mean=90.0,
+            conflict_count_window=0,
+            conflict_ratio=0.0,
+            mid_values=[1.0],
+            spread_values=[0.1, 0.1],
+            mid_return_bps_values=[0.0, 10.0],
+            source_count_values=[1, 1],
+            quality_score_values=[90.0, 90.0],
+            disagreement_bps_values=[None, None],
+            staleness_ms_values=[0, 60_000],
+            conflict_flags=[False, False],
+            source_offset_ms_values=[None, None],
+            provenance_refs=["state://XAUUSD/M1"],
+        )
 
 
 def test_feature_spec_requires_unique_output_columns() -> None:

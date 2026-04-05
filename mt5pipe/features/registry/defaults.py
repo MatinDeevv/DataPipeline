@@ -1,4 +1,4 @@
-"""Default Phase 1 feature registry entries."""
+"""Default stable feature registry entries."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from mt5pipe.features.registry.models import FeatureSpec
 
 
 def get_default_feature_specs() -> list[FeatureSpec]:
-    """Return the core Phase 1 feature specs backed by existing builder code."""
+    """Return the stable registry-backed feature specs."""
     return [
         FeatureSpec(
             feature_name="cyclical_time",
@@ -79,6 +79,94 @@ def get_default_feature_specs() -> list[FeatureSpec]:
             qa_policy_ref="qa.feature.default@1.0.0",
             status="stable",
             tags=["core", "context"],
+        ),
+        FeatureSpec(
+            feature_name="microstructure_pressure",
+            family="disagreement",
+            version="1.0.0",
+            description="Dual-source disagreement pressure proxies and burst metrics",
+            input_contract="BuiltBar",
+            input_clock="M1",
+            output_clock="M1",
+            builder_ref="mt5pipe.features.disagreement:add_disagreement_features",
+            output_columns=[
+                "mid_divergence_proxy_bps",
+                "spread_divergence_proxy_bps",
+                "disagreement_pressure_bps",
+                "disagreement_zscore_60",
+                "conflict_burst_15",
+                "disagreement_burst_15",
+                "staleness_asymmetry_15",
+                "disagreement_entropy_30",
+            ],
+            dependencies=[
+                "close",
+                "spread_mean",
+                "tick_count",
+                "conflict_count",
+                "dual_source_ticks",
+                "secondary_present_ticks",
+                "dual_source_ratio",
+            ],
+            lookback_rows=60,
+            warmup_rows=60,
+            point_in_time_safe=True,
+            missingness_policy="allow",
+            qa_policy_ref="qa.feature.default@1.0.0",
+            status="stable",
+            tags=["core", "microstructure", "phase3"],
+        ),
+        FeatureSpec(
+            feature_name="flow_shape",
+            family="event_shape",
+            version="1.0.0",
+            description="Arrival-rate, burstiness, silence, run, and path-shape features",
+            input_contract="BuiltBar",
+            input_clock="M1",
+            output_clock="M1",
+            builder_ref="mt5pipe.features.event_shape:add_event_shape_features",
+            output_columns=[
+                "tick_rate_hz",
+                "interarrival_mean_ms",
+                "burstiness_20",
+                "silence_ratio_20",
+                "direction_switch_rate_20",
+                "signed_run_length",
+                "path_efficiency_20",
+                "tortuosity_20",
+            ],
+            dependencies=["tick_count", "mid_return", "_filled"],
+            lookback_rows=20,
+            warmup_rows=20,
+            point_in_time_safe=True,
+            missingness_policy="allow",
+            qa_policy_ref="qa.feature.default@1.0.0",
+            status="stable",
+            tags=["core", "flow", "phase3"],
+        ),
+        FeatureSpec(
+            feature_name="market_complexity",
+            family="entropy",
+            version="1.0.0",
+            description="Trailing entropy and complexity metrics over returns and volatility",
+            input_contract="BuiltBar",
+            input_clock="M1",
+            output_clock="M1",
+            builder_ref="mt5pipe.features.entropy:add_entropy_features",
+            output_columns=[
+                "return_sign_shannon_entropy_30",
+                "return_permutation_entropy_30",
+                "return_sample_entropy_30",
+                "volatility_approx_entropy_30",
+            ],
+            dependencies=["mid_return", "realized_vol"],
+            lookback_rows=30,
+            warmup_rows=30,
+            point_in_time_safe=True,
+            missingness_policy="allow",
+            qa_policy_ref="qa.feature.default@1.0.0",
+            status="stable",
+            tags=["core", "complexity", "phase3"],
         ),
     ]
 
