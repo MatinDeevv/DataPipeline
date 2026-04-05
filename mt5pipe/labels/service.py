@@ -197,6 +197,7 @@ def _label_manifest_diagnostics(label_df: pl.DataFrame, label_pack: LabelPack) -
         "purge_rows": label_pack.purge_rows,
         "recommended_min_embargo_rows": label_pack.purge_rows,
         "exclusions": label_pack.exclusions,
+        "constant_output_columns": _constant_output_columns(label_df, label_pack.output_columns),
         "horizon_summaries": horizon_summaries,
     }
 
@@ -217,6 +218,19 @@ def _class_balance(label_df: pl.DataFrame, column: str) -> dict[str, int]:
         "0": int(sum(1 for value in non_null if value == 0)),
         "1": int(sum(1 for value in non_null if value == 1)),
     }
+
+
+def _constant_output_columns(label_df: pl.DataFrame, output_columns: list[str]) -> list[str]:
+    constant_columns: list[str] = []
+    for column in output_columns:
+        if column not in label_df.columns:
+            continue
+        non_null = label_df[column].drop_nulls()
+        if non_null.is_empty():
+            continue
+        if non_null.n_unique() == 1:
+            constant_columns.append(column)
+    return sorted(constant_columns)
 
 
 def _hit_rate(class_balance: dict[str, int]) -> float | None:

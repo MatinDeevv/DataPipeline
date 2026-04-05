@@ -29,7 +29,8 @@ The top-level package is `mt5pipe/`. In architecture discussions, "pipeline" map
 - **Responsibility:** Feature builders, feature registry, label generation, label registry
 - **Public surface:** registry helpers, artifact ref/load helpers, and stable family builders are re-exported from `mt5pipe.features.public` and `mt5pipe.labels.public`
 - **Stable machine-native families:** `disagreement/*`, `event_shape/*`, `entropy/*`, `multiscale/*`
-- **Label artifact note:** label manifests include compact horizon/class-balance diagnostics plus explicit horizon span and recommended embargo floor; insufficient forward-horizon triple-barrier rows are explicitly null
+- **Stable selector cleanup:** stable `htf_context/*` excludes higher-timeframe `*_tick_count` columns; stable `disagreement/*` is limited to `mid_divergence_proxy_bps`, `disagreement_pressure_bps`, `disagreement_zscore_60`, and `disagreement_burst_15`
+- **Label artifact note:** label manifests include compact horizon/class-balance diagnostics plus explicit horizon span, recommended embargo floor, and `constant_output_columns`; insufficient forward-horizon triple-barrier rows are explicitly null
 
 ### Agent 3 — Compiler
 - **Owns:** `mt5pipe/compiler/`, `mt5pipe/truth/`, `mt5pipe/catalog/`
@@ -193,3 +194,12 @@ The existing codebase has direct cross-sector imports that predate this boundary
 5. Log boundary changes in `chat/contracts.md`
 6. Post blockers/updates/handoffs in `chat/coordination.md`
 7. Run `pytest tests/test_boundary_imports.py` to check violations
+
+---
+
+## Phase 4 Truth Interpretation
+
+- Trust warnings are reserved for real blockers to a green checkpoint: unexpected nulls, blocking constant columns, family missingness pressure, label issues, or source quality below preferred research comfort.
+- Expected sparse nulls, such as HTF alignment sparsity or declared warmup sparsity, remain visible in `TrustReport.metrics.quality_caveat_summary.accepted_caveats` and in CLI `quality_caveats` / `quality_family_summary` output, but they do not create warning reasons by themselves.
+- Slice-trivial constants that are expected for a synchronized slice remain visible as accepted caveats. Only blocking constant columns stay in the warning path.
+- Source-quality reporting may fall back to `merge_diagnostics` when formal `merge_qa` artifacts are absent. `inspect-dataset` and `diff-dataset` surface this deterministically through `source_quality_metrics`.

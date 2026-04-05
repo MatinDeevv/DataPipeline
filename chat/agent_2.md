@@ -92,3 +92,21 @@ safe-selectors: disagreement/*, event_shape/*, entropy/*, multiscale/* are now c
 tests: pytest tests/test_features_phase4_checkpoint.py tests/test_features_phase4.py tests/test_features_phase3.py tests/test_labels.py tests/test_compiler.py tests/test_boundary_imports.py tests/test_truth_core.py tests/test_contracts.py -q
 result: 55 passed, 1 xfailed
 
+[2026-04-04T23:15:35.8155548-04:00]
+agent: agent_2
+feedback_read: yes
+feedback_source: feedbacks/latest.md
+feedback_summary: Freeze the current Phase 4 surface and focus on making the nonhuman path boringly reliable. For Agent 2 that means cleaning null-heavy or trivial stable columns, tightening warmup semantics, and keeping label compatibility honest.
+phase: Phase 4 cleanup
+area: features|labels
+
+[2026-04-04T23:33:12.6400777-04:00]
+agent: agent_2
+area: features|labels
+summary: completed the cleanup pass without adding families. Stable htf_context/* now excludes HTF *_tick_count outputs, stable disagreement/* is narrowed to the four production-ready pressure columns, and event/disagreement warmup is enforced per column rather than blanket family-wide.
+update: label artifact diagnostics now include constant_output_columns so slice-trivial labels stay visible instead of silently blending into the stable path.
+safe-selectors: time/*, session/*, quality/*, htf_context/*, disagreement/*, event_shape/*, entropy/*, multiscale/* remain stable for the nonhuman checkpoint path.
+demoted-from-stable: htf_context/* -> M5_tick_count M15_tick_count H1_tick_count H4_tick_count D1_tick_count; disagreement/* -> spread_divergence_proxy_bps conflict_burst_15 staleness_asymmetry_15 disagreement_entropy_30
+tests: pytest tests/test_features_phase3.py tests/test_features_phase4.py tests/test_features_phase4_checkpoint.py tests/test_labels.py tests/test_compiler.py tests/test_boundary_imports.py tests/test_truth_core.py tests/test_contracts.py -q
+result: 59 passed, 1 xfailed
+

@@ -25,6 +25,16 @@ class TruthService:
     MIN_LABEL_QUALITY_SCORE = 80.0
     MIN_SOURCE_QUALITY_SCORE = 60.0
     PREFERRED_SOURCE_QUALITY_SCORE = 75.0
+    CRITICAL_BASE_CONSTANT_COLUMNS = {
+        "open",
+        "high",
+        "low",
+        "close",
+        "spread_mean",
+        "mid_return",
+        "realized_vol",
+        "tick_count",
+    }
 
     FAMILY_MISSINGNESS_THRESHOLDS = {
         "time": 0.0,
@@ -55,7 +65,7 @@ class TruthService:
         manifest_path: Path | None = None,
     ) -> TrustReport:
         quality = dataset_quality_report(dataset_df)
-        dataset_quality_metrics = self._dataset_quality_metrics(dataset_df, quality)
+        dataset_quality_metrics = self._dataset_quality_metrics(dataset_df, quality, feature_specs, label_pack)
         checks: list[QaCheckResult] = []
         hard_failures: list[str] = []
         warnings: list[str] = []
@@ -104,9 +114,9 @@ class TruthService:
             4,
         )
 
-        if dataset_quality_metrics["total_nulls"] > 0:
+        if dataset_quality_metrics["unexpected_null_columns"]:
             warnings.append("dataset_contains_nulls")
-        if dataset_quality_metrics["constant_columns"]:
+        if dataset_quality_metrics["blocking_constant_columns"]:
             warnings.append("dataset_contains_constant_columns")
 
         label_check = self._label_quality_check(dataset_df, label_pack)
@@ -132,6 +142,10 @@ class TruthService:
         elif source_check.status == "warning":
             warnings.append("source_quality_warning")
         source_quality_score = source_check.score
+        quality_caveat_summary = self._quality_caveat_summary(
+            dataset_quality_metrics=dataset_quality_metrics,
+            source_check=source_check,
+        )
 
         lineage_check = self._lineage_check(manifest)
         checks.append(lineage_check)
@@ -234,6 +248,7 @@ class TruthService:
                 "duplicate_primary_clock_rows": int(leakage_check.metrics.get("duplicate_primary_clock_rows", 0)),
                 "quality_score": float(quality.get("quality_score", 0.0)),
                 "dataset_quality": dataset_quality_metrics,
+                "quality_caveat_summary": quality_caveat_summary,
                 "build_row_stats": build_row_stats,
                 "split_rows": coverage_check.metrics.get("split_rows", {}),
                 "feature_family_missingness": family_missingness_check.metrics,
@@ -628,21 +643,34 @@ class TruthService:
         paths: StoragePaths,
         store: ParquetStore,
         state_df: pl.DataFrame,
-    ) -> dict[str, float]:
-        frames: list[pl.DataFrame] = []
+    ) -> dict[str, object]:
+        qa_frames: list[pl.DataFrame] = []
+        diagnostic_frames: list[pl.DataFrame] = []
         current = date_from
         while current <= date_to:
-            day = store.read_dir(paths.merge_qa_dir(symbol, current))
-            if not day.is_empty():
-                frames.append(day)
+            qa_day = store.read_dir(paths.merge_qa_dir(symbol, current))
+            if not qa_day.is_empty():
+                qa_frames.append(qa_day)
+            diagnostic_day = store.read_dir(paths.merge_diagnostics_dir(symbol, current))
+            if not diagnostic_day.is_empty():
+                diagnostic_frames.append(diagnostic_day)
             current += dt.timedelta(days=1)
 
-        merge_df = pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
+        merge_df = pl.concat(qa_frames, how="diagonal_relaxed") if qa_frames else pl.DataFrame()
+        diagnostic_df = pl.concat(diagnostic_frames, how="diagonal_relaxed") if diagnostic_frames else pl.DataFrame()
         state_rows = float(len(state_df))
         return {
             "merge_qa_days": float(merge_df.height),
+            "merge_diagnostics_days": float(diagnostic_df.height),
+            "merge_observability_source": "merge_qa" if not merge_df.is_empty() else "merge_diagnostics" if not diagnostic_df.is_empty() else "none",
             "dual_source_ratio_mean": float(merge_df["dual_source_ratio"].mean()) if "dual_source_ratio" in merge_df.columns else 0.0,
             "merge_conflict_mean": float(merge_df["conflicts"].mean()) if "conflicts" in merge_df.columns else 0.0,
+            "diagnostic_dual_source_ratio_mean": (
+                float(diagnostic_df["dual_source_ratio"].mean()) if "dual_source_ratio" in diagnostic_df.columns else 0.0
+            ),
+            "diagnostic_conflict_mean": (
+                float(diagnostic_df["conflicts"].mean()) if "conflicts" in diagnostic_df.columns else 0.0
+            ),
             "state_rows": state_rows,
             "state_quality_mean": float(state_df["quality_score"].mean()) if "quality_score" in state_df.columns and not state_df.is_empty() else 0.0,
             "state_conflict_rate": float(state_df["conflict_flag"].cast(pl.Float64).mean()) if "conflict_flag" in state_df.columns and not state_df.is_empty() else 0.0,
@@ -654,7 +682,7 @@ class TruthService:
             ) if "trust_flags" in state_df.columns and not state_df.is_empty() else 0.0,
         }
 
-    def _source_quality_score(self, metrics: dict[str, float]) -> float:
+    def _source_quality_score(self, metrics: dict[str, object]) -> float:
         state_quality_mean = metrics.get("state_quality_mean", 0.0)
         merge_qa_days = metrics.get("merge_qa_days", 0.0)
         dual_source_ratio_mean = metrics.get("dual_source_ratio_mean", 0.0)
@@ -678,21 +706,176 @@ class TruthService:
         score -= min(max(state_filled_ratio, 0.0) * 35.0, 15.0)
         return round(max(0.0, min(100.0, score)), 4)
 
-    @staticmethod
-    def _dataset_quality_metrics(dataset_df: pl.DataFrame, quality: dict[str, object]) -> dict[str, object]:
+    def _dataset_quality_metrics(
+        self,
+        dataset_df: pl.DataFrame,
+        quality: dict[str, object],
+        feature_specs: list[FeatureSpec],
+        label_pack: LabelPack,
+    ) -> dict[str, object]:
         null_columns = {
             column: int(dataset_df[column].null_count())
             for column in dataset_df.columns
             if int(dataset_df[column].null_count()) > 0
         }
         constant_columns = sorted(str(column) for column in quality.get("constant_columns", []))
+        feature_specs_by_column = self._feature_specs_by_output_column(feature_specs)
+        label_columns = set(label_pack.output_columns)
+
+        expected_sparse_null_columns: dict[str, dict[str, object]] = {}
+        unexpected_null_columns: dict[str, dict[str, object]] = {}
+        family_warning_summary: dict[str, list[str]] = {}
+
+        for column, null_count in sorted(null_columns.items()):
+            feature_spec = feature_specs_by_column.get(column)
+            if feature_spec is None:
+                if column in label_columns:
+                    unexpected_null_columns[column] = {
+                        "family": "label",
+                        "null_count": null_count,
+                        "reason": "label_nulls",
+                    }
+                    family_warning_summary.setdefault("label", []).append(
+                        f"unexpected label nulls in {column}={null_count}"
+                    )
+                else:
+                    unexpected_null_columns[column] = {
+                        "family": "base",
+                        "null_count": null_count,
+                        "reason": "base_nulls",
+                    }
+                    family_warning_summary.setdefault("base", []).append(
+                        f"unexpected base nulls in {column}={null_count}"
+                    )
+                continue
+
+            if feature_spec.family == "htf_context":
+                expected_sparse_null_columns[column] = {
+                    "family": feature_spec.family,
+                    "null_count": null_count,
+                    "reason": "expected_alignment_sparsity",
+                }
+                family_warning_summary.setdefault(feature_spec.family, []).append(
+                    f"expected alignment sparsity in {column}={null_count}"
+                )
+                continue
+
+            if feature_spec.missingness_policy == "allow" and null_count <= int(feature_spec.warmup_rows):
+                expected_sparse_null_columns[column] = {
+                    "family": feature_spec.family,
+                    "null_count": null_count,
+                    "reason": "expected_warmup_sparsity",
+                }
+                family_warning_summary.setdefault(feature_spec.family, []).append(
+                    f"expected warmup sparsity in {column}={null_count}"
+                )
+                continue
+
+            unexpected_null_columns[column] = {
+                "family": feature_spec.family,
+                "null_count": null_count,
+                "reason": "unexpected_feature_nulls",
+            }
+            family_warning_summary.setdefault(feature_spec.family, []).append(
+                f"unexpected nulls in {column}={null_count}"
+            )
+
+        slice_trivial_constant_columns: dict[str, dict[str, object]] = {}
+        blocking_constant_columns: dict[str, dict[str, object]] = {}
+        feature_output_columns = {column for spec in feature_specs for column in spec.output_columns}
+
+        for feature_spec in feature_specs:
+            constant_outputs = sorted(set(feature_spec.output_columns).intersection(constant_columns))
+            if not constant_outputs:
+                continue
+            target = slice_trivial_constant_columns
+            reason = "slice_trivial_feature_constant"
+            if len(constant_outputs) == len(feature_spec.output_columns):
+                target = blocking_constant_columns
+                reason = "all_feature_outputs_constant"
+                family_warning_summary.setdefault(feature_spec.family, []).append(
+                    f"all {len(constant_outputs)} feature outputs are constant on this slice"
+                )
+            else:
+                family_warning_summary.setdefault(feature_spec.family, []).append(
+                    f"{len(constant_outputs)} of {len(feature_spec.output_columns)} feature columns are slice-trivial constants"
+                )
+            for column in constant_outputs:
+                target[column] = {
+                    "family": feature_spec.family,
+                    "reason": reason,
+                }
+
+        for horizon in label_pack.horizons_minutes:
+            token = f"_{horizon}m"
+            horizon_columns = [column for column in label_pack.output_columns if token in column]
+            constant_horizon_columns = sorted(set(horizon_columns).intersection(constant_columns))
+            if not constant_horizon_columns:
+                continue
+            target = slice_trivial_constant_columns
+            reason = "slice_trivial_label_constant"
+            if len(constant_horizon_columns) == len(horizon_columns):
+                target = blocking_constant_columns
+                reason = "all_label_horizon_columns_constant"
+                family_warning_summary.setdefault("label", []).append(
+                    f"all label columns for horizon {horizon}m are constant"
+                )
+            else:
+                family_warning_summary.setdefault("label", []).append(
+                    f"{len(constant_horizon_columns)} label columns are slice-trivial constants at {horizon}m"
+                )
+            for column in constant_horizon_columns:
+                target[column] = {
+                    "family": "label",
+                    "reason": reason,
+                }
+
+        for column in constant_columns:
+            if column in feature_output_columns or column in label_columns:
+                continue
+            target = slice_trivial_constant_columns
+            reason = "slice_trivial_base_constant"
+            if column in self.CRITICAL_BASE_CONSTANT_COLUMNS:
+                target = blocking_constant_columns
+                reason = "critical_base_column_constant"
+                family_warning_summary.setdefault("base", []).append(
+                    f"critical base column {column} is constant"
+                )
+            else:
+                family_warning_summary.setdefault("base", []).append(
+                    f"slice-trivial base/source column {column} is constant"
+                )
+            target[column] = {
+                "family": "base",
+                "reason": reason,
+            }
+
+        family_warning_summary = {
+            family: sorted(set(notes))
+            for family, notes in family_warning_summary.items()
+            if notes
+        }
+
         return {
             "quality_score": float(quality.get("quality_score", 0.0)),
             "total_nulls": int(quality.get("total_nulls", 0)),
             "null_columns": null_columns,
             "constant_columns": constant_columns,
             "duplicate_timestamps": int(quality.get("duplicate_timestamps", 0)),
+            "expected_sparse_null_columns": expected_sparse_null_columns,
+            "unexpected_null_columns": unexpected_null_columns,
+            "slice_trivial_constant_columns": slice_trivial_constant_columns,
+            "blocking_constant_columns": blocking_constant_columns,
+            "family_warning_summary": family_warning_summary,
         }
+
+    @staticmethod
+    def _feature_specs_by_output_column(feature_specs: list[FeatureSpec]) -> dict[str, FeatureSpec]:
+        mapping: dict[str, FeatureSpec] = {}
+        for spec in feature_specs:
+            for column in spec.output_columns:
+                mapping[column] = spec
+        return mapping
 
     @staticmethod
     def _group_feature_specs_by_family(feature_specs: list[FeatureSpec]) -> dict[str, list[FeatureSpec]]:
@@ -789,11 +972,22 @@ class TruthService:
             label_nulls = int(check.metrics.get("label_nulls", 0))
             return f"label nulls remain after purge: {label_nulls}"
         if check.check_name == "source_quality":
+            merge_observability_source = str(check.metrics.get("merge_observability_source", "none"))
+            observability_detail = (
+                f"merge_qa_days={float(check.metrics.get('merge_qa_days', 0.0)):.0f}"
+                if merge_observability_source == "merge_qa"
+                else (
+                    f"merge_diagnostics_days={float(check.metrics.get('merge_diagnostics_days', 0.0)):.0f}, "
+                    f"diagnostic_dual_source_ratio_mean={float(check.metrics.get('diagnostic_dual_source_ratio_mean', 0.0)):.4f}"
+                    if merge_observability_source == "merge_diagnostics"
+                    else "no merge observability artifacts found"
+                )
+            )
             return (
                 f"score {check.score:.2f} is below preferred {self.PREFERRED_SOURCE_QUALITY_SCORE:.2f}; "
+                f"{observability_detail}; "
                 f"state_quality_mean={float(check.metrics.get('state_quality_mean', 0.0)):.2f}, "
-                f"state_filled_ratio={float(check.metrics.get('state_filled_ratio', 0.0)):.4f}, "
-                f"dual_source_ratio_mean={float(check.metrics.get('dual_source_ratio_mean', 0.0)):.4f}"
+                f"state_filled_ratio={float(check.metrics.get('state_filled_ratio', 0.0)):.4f}"
             )
         return "warning threshold reached"
 
@@ -805,11 +999,38 @@ class TruthService:
         warning_check_names: set[str],
     ) -> str:
         if code == "dataset_contains_nulls":
-            null_columns = dict(dataset_quality_metrics.get("null_columns", {}))
-            return f"dataset contains nulls in: {TruthService._format_column_metric_sample(null_columns)}"
+            unexpected_null_columns = {
+                str(name): int(details.get("null_count", 0))
+                for name, details in dict(dataset_quality_metrics.get("unexpected_null_columns", {})).items()
+            }
+            expected_sparse_null_columns = dict(dataset_quality_metrics.get("expected_sparse_null_columns", {}))
+            if unexpected_null_columns:
+                return f"unexpected nulls remain in: {TruthService._format_column_metric_sample(unexpected_null_columns)}"
+            if expected_sparse_null_columns:
+                family_summary = TruthService._format_family_note_sample(
+                    dict(dataset_quality_metrics.get("family_warning_summary", {})),
+                    families={"htf_context", "event_shape", "entropy", "multiscale"},
+                )
+                return f"expected sparse nulls remain: {family_summary}"
+            return "dataset contains null values"
         if code == "dataset_contains_constant_columns":
-            constant_columns = [str(column) for column in dataset_quality_metrics.get("constant_columns", [])]
-            return f"constant columns detected: {TruthService._format_name_sample(constant_columns)}"
+            blocking_constant_columns = {
+                str(name): str(details.get("reason", "blocking_constant"))
+                for name, details in dict(dataset_quality_metrics.get("blocking_constant_columns", {})).items()
+            }
+            slice_trivial_constant_columns = dict(dataset_quality_metrics.get("slice_trivial_constant_columns", {}))
+            if blocking_constant_columns:
+                return (
+                    "blocking constant columns remain: "
+                    f"{TruthService._format_name_sample(sorted(blocking_constant_columns))}"
+                )
+            if slice_trivial_constant_columns:
+                family_summary = TruthService._format_family_note_sample(
+                    dict(dataset_quality_metrics.get("family_warning_summary", {})),
+                    families={"base", "quality", "disagreement", "label"},
+                )
+                return f"slice-trivial constants remain: {family_summary}"
+            return "dataset contains constant columns"
         if code == "source_quality_warning" and "source_quality" in warning_check_names:
             return ""
         if code == "label_quality_warning" and "label_quality" in warning_check_names:
@@ -844,6 +1065,84 @@ class TruthService:
         if remainder > 0:
             visible.append(f"+{remainder} more")
         return ", ".join(visible)
+
+    @staticmethod
+    def _format_family_note_sample(
+        family_notes: dict[str, list[str]],
+        *,
+        families: set[str] | None = None,
+        limit: int = 4,
+    ) -> str:
+        selected_items = [
+            (family, notes)
+            for family, notes in sorted(family_notes.items())
+            if not families or family in families
+        ]
+        if not selected_items:
+            return "-"
+        visible = [f"{family}: {notes[0]}" for family, notes in selected_items[:limit] if notes]
+        remainder = len(selected_items) - len(visible)
+        if remainder > 0:
+            visible.append(f"+{remainder} more families")
+        return "; ".join(visible)
+
+    def _quality_caveat_summary(
+        self,
+        *,
+        dataset_quality_metrics: dict[str, object],
+        source_check: QaCheckResult,
+    ) -> dict[str, object]:
+        accepted_caveats: list[str] = []
+        green_blockers: list[str] = []
+        publication_blockers: list[str] = []
+
+        expected_sparse_null_columns = dict(dataset_quality_metrics.get("expected_sparse_null_columns", {}))
+        unexpected_null_columns = dict(dataset_quality_metrics.get("unexpected_null_columns", {}))
+        slice_trivial_constant_columns = dict(dataset_quality_metrics.get("slice_trivial_constant_columns", {}))
+        blocking_constant_columns = dict(dataset_quality_metrics.get("blocking_constant_columns", {}))
+        family_warning_summary = dict(dataset_quality_metrics.get("family_warning_summary", {}))
+
+        if expected_sparse_null_columns:
+            accepted_caveats.append(
+                "expected sparse nulls: "
+                + self._format_family_note_sample(
+                    family_warning_summary,
+                    families={"htf_context", "event_shape", "entropy", "multiscale"},
+                )
+            )
+        if slice_trivial_constant_columns:
+            accepted_caveats.append(
+                "slice-trivial constants: "
+                + self._format_family_note_sample(
+                    family_warning_summary,
+                    families={"base", "quality", "disagreement", "label"},
+                )
+            )
+        if unexpected_null_columns:
+            green_blockers.append(
+                "unexpected nulls remain: "
+                + self._format_column_metric_sample(
+                    {name: int(details.get("null_count", 0)) for name, details in unexpected_null_columns.items()}
+                )
+            )
+        if blocking_constant_columns:
+            green_blockers.append(
+                "blocking constant columns remain: "
+                + self._format_name_sample(sorted(str(name) for name in blocking_constant_columns))
+            )
+        if source_check.status == "warning":
+            green_blockers.append(f"source_quality below preferred threshold ({source_check.score:.2f} < {self.PREFERRED_SOURCE_QUALITY_SCORE:.2f})")
+        elif source_check.status == "failed":
+            publication_blockers.append(
+                f"source_quality below publication threshold ({source_check.score:.2f} < {self.MIN_SOURCE_QUALITY_SCORE:.2f})"
+            )
+
+        return {
+            "accepted_caveats": accepted_caveats,
+            "green_blockers": green_blockers,
+            "publication_blockers": publication_blockers,
+            "family_warning_summary": family_warning_summary,
+        }
 
     @staticmethod
     def _decision_summary(

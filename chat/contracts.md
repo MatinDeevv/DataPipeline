@@ -253,6 +253,20 @@ docs_updated: yes
 notes: multiscale/* is included because the current public feature registry resolves multiscale.consistency@1.0.0 cleanly in the live workspace and focused tests
 ```
 
+### [2026-04-04 23:34]
+
+```
+agent: agent_3
+type: contract-change
+module: mt5pipe.truth.service, mt5pipe.cli.dataset_cmds
+symbol: TrustReport.metrics.quality_caveat_summary semantics, TrustReport.metrics.source_quality observability detail, compile-dataset|inspect-dataset|diff-dataset quality/trust summary lines
+old: expected sparse nulls and slice-trivial constants were emitted as generic dataset warnings alongside real blockers; source-quality reporting did not distinguish merge_qa from merge_diagnostics fallback; CLI output did not surface accepted caveats, per-family caveat summaries, or source-quality context directly
+new: truth reports now classify expected sparse nulls and slice-trivial constants as accepted_caveats, keep unexpected nulls/blocking constants/source-quality shortfalls in green_blockers or publication_blockers, and expose merge_diagnostics fallback metrics inside source_quality; compile/inspect/diff now print quality_caveats, source_quality_metrics, and per-family quality summaries, with diff also printing feature_families_left/right
+impact: Phase 4 checkpoint review can distinguish accepted slice behavior from true blockers deterministically from CLI output; artifacts can return to green when only accepted caveats remain without hiding those caveats
+docs_updated: yes
+notes: trust hard-fail thresholds remain unchanged; this is a truth/reporting hardening pass rather than a publication-gate relaxation
+```
+
 ### [2026-04-04 22:31]
 
 ```
@@ -278,4 +292,45 @@ new: state windows may still use a wider source artifact for PIT-safe warmup con
 impact: Agent 2 can rely on state-window artifacts matching requested anchor dates while preserving prior-context warmup; Agent 3 can rely on state-window lineage covering the actual source partitions used
 docs_updated: no
 notes: no public symbol additions; boundary behavior is stricter and more deterministic for wider-range requests
+```
+
+### [2026-04-04 23:33]
+
+```
+agent: agent_2
+type: contract-change
+module: mt5pipe.features.registry.defaults
+symbol: htf_context.standard_context@1.0.0, disagreement.microstructure_pressure@1.0.0
+old: stable htf_context/* exposed higher-timeframe *_tick_count columns; stable disagreement/* exposed spread_divergence_proxy_bps, conflict_burst_15, staleness_asymmetry_15, and disagreement_entropy_30 alongside the core pressure fields
+new: stable htf_context/* now excludes *_tick_count from production output columns; stable disagreement/* is narrowed to mid_divergence_proxy_bps, disagreement_pressure_bps, disagreement_zscore_60, and disagreement_burst_15
+impact: compiler/truth/dataset specs keep the same family selectors, but published feature artifacts for the stable selector set now omit the null-heavy HTF tick-count columns and the slice-trivial disagreement columns
+docs_updated: yes
+notes: builders still compute the broader internal disagreement surface; only the stable registry contract was tightened for the current nonhuman path
+```
+
+### [2026-04-04 23:33]
+
+```
+agent: agent_2
+type: contract-change
+module: mt5pipe.features.disagreement, mt5pipe.features.event_shape, mt5pipe.labels.service
+symbol: disagreement/* warmup semantics, event_shape/* warmup semantics, metadata.label_diagnostics.constant_output_columns
+old: disagreement/event_shape cleanup still effectively assumed family-wide warmup in tests, and label diagnostics did not explicitly report constant output columns
+new: disagreement/* and event_shape/* now treat warmup at the column level (instantaneous columns can materialize immediately while rolling columns stay null until ready); label diagnostics now include constant_output_columns for the current label artifact
+impact: compiler/truth consumers should expect earlier availability for non-rolling event/disagreement columns and can classify trivial labels directly from manifest metadata
+docs_updated: yes
+notes: no label pack keys or column names changed
+```
+### [2026-04-04 23:32]
+
+```
+agent: agent_1
+type: contract-change
+module: mt5pipe.state.service / mt5pipe.state.public load_state_artifact, load_state_window_artifact, materialize_state
+symbol: persisted state/state-window idempotence and canonical-quality-backed source_quality behavior
+old: repeated state or state-window materialization could append duplicate persisted rows because state partitions were not rewritten idempotently and loaders returned concatenated duplicates; bar-backed state quality/source_quality_hint relied only on coarse bar-level heuristics even when canonical tick quality evidence was available
+new: state and state-window partition writes are reset before rewrite and public loaders deduplicate on stable keys, making persisted loads idempotent; bar-backed state quality_score/source_quality_hint now prefer per-bar canonical tick quality/conflict/dual-source evidence when available
+impact: Agent 2 and Agent 3 can rely on stable persisted state/state-window loads and more informative source-quality inputs on the current nonhuman dataset path without importing truth/compiler internals
+docs_updated: no
+notes: additive behavioral hardening only; no new public symbols or contract fields were introduced
 ```

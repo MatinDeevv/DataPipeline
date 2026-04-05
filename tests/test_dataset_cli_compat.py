@@ -50,6 +50,25 @@ def _make_trust_report(*, status: str = "accepted", score: float = 97.25) -> Sim
                 "total_nulls": 0,
                 "null_columns": {},
                 "constant_columns": [],
+                "expected_sparse_null_columns": {},
+                "unexpected_null_columns": {},
+                "slice_trivial_constant_columns": {},
+                "blocking_constant_columns": {},
+                "family_warning_summary": {},
+            },
+            "quality_caveat_summary": {
+                "accepted_caveats": [],
+                "green_blockers": [],
+                "publication_blockers": [],
+                "family_warning_summary": {},
+            },
+            "source_quality": {
+                "merge_observability_source": "merge_qa",
+                "merge_qa_days": 2.0,
+                "state_quality_mean": score,
+                "state_filled_ratio": 0.0,
+                "dual_source_ratio_mean": 0.8,
+                "merge_conflict_mean": 0.0,
             }
         },
         hard_failures=[],
@@ -154,6 +173,8 @@ def test_compile_dataset_cli_success(monkeypatch) -> None:
     assert 'trust_check_counts: {"failed": 0, "passed": 8, "warning": 0}' in result.stdout
     assert "trust_warning_reasons: []" in result.stdout
     assert "trust_rejection_reasons: []" in result.stdout
+    assert 'quality_caveats: {"accepted_caveats": [], "green_blockers": [], "publication_blockers": []}' in result.stdout
+    assert 'source_quality_metrics: {"dual_source_ratio_mean": 0.8, "merge_conflict_mean": 0.0, "merge_observability_source": "merge_qa", "merge_qa_days": 2.0, "state_filled_ratio": 0.0, "state_quality_mean": 98.5}' in result.stdout
     assert "published_ref: dataset://xau_m1_core@1.0.0" in result.stdout
 
 
@@ -182,7 +203,10 @@ def test_inspect_dataset_cli_resolution_path(monkeypatch, tmp_path: Path) -> Non
         assert 'trust_check_counts: {"failed": 0, "passed": 8, "warning": 0}' in result.stdout
         assert "trust_warning_reasons: []" in result.stdout
         assert "trust_rejection_reasons: []" in result.stdout
-        assert 'dataset_quality_alerts: {"constant_columns_sample": [], "null_columns_sample": {}, "quality_score": 97.25, "total_nulls": 0}' in result.stdout
+        assert 'quality_caveats: {"accepted_caveats": [], "green_blockers": [], "publication_blockers": []}' in result.stdout
+        assert "quality_family_summary: {}" in result.stdout
+        assert 'source_quality_metrics: {"dual_source_ratio_mean": 0.8, "merge_conflict_mean": 0.0, "merge_observability_source": "merge_qa", "merge_qa_days": 2.0, "state_filled_ratio": 0.0, "state_quality_mean": 97.25}' in result.stdout
+        assert 'dataset_quality_alerts: {"blocking_constant_columns_sample": [], "constant_columns_sample": [], "expected_sparse_null_columns_sample": {}, "null_columns_sample": {}, "quality_score": 97.25, "slice_trivial_constant_columns_sample": [], "total_nulls": 0, "unexpected_null_columns_sample": {}}' in result.stdout
         assert '"state_artifacts": ["state.xauusd.m1.20260401"]' in result.stdout
 
     assert refs_seen == ["dataset.inspect.001", "dataset://xau_m1_core@1.0.0", str(manifest_path)]
@@ -207,6 +231,27 @@ def test_diff_dataset_cli_resolution_path(monkeypatch, tmp_path: Path) -> None:
             "decision_summary": "accepted for publication with warnings; total=97.25, warnings=1",
             "warning_reasons": ["source_quality: score 72.00 is below preferred 75.00"],
             "check_status_counts": {"passed": 7, "warning": 1, "failed": 0},
+            "metrics": {
+                **right_trust_report.metrics,
+                "quality_caveat_summary": {
+                    "accepted_caveats": [
+                        "expected sparse nulls: htf_context: expected alignment sparsity in H1_tick_count=10"
+                    ],
+                    "green_blockers": ["source_quality below preferred threshold (72.00 < 75.00)"],
+                    "publication_blockers": [],
+                    "family_warning_summary": {
+                        "htf_context": ["expected alignment sparsity in H1_tick_count=10"],
+                    },
+                },
+                "source_quality": {
+                    "merge_observability_source": "merge_diagnostics",
+                    "merge_diagnostics_days": 2.0,
+                    "state_quality_mean": 72.0,
+                    "state_filled_ratio": 0.0,
+                    "diagnostic_dual_source_ratio_mean": 0.0,
+                    "diagnostic_conflict_mean": 0.0,
+                },
+            },
         }
     )
 
@@ -242,6 +287,8 @@ def test_diff_dataset_cli_resolution_path(monkeypatch, tmp_path: Path) -> None:
     assert calls == [("dataset.left.001", str(tmp_path / "right_manifest.json"))]
     assert "left_spec_ref: xau_m1_core@1.0.0" in result.stdout
     assert "right_spec_ref: xau_m1_core@1.0.1" in result.stdout
+    assert 'feature_families_left: ["quality", "time"]' in result.stdout
+    assert 'feature_families_right: ["htf_context", "time"]' in result.stdout
     assert 'feature_refs_added: ["htf_context.standard_context@1.0.0"]' in result.stdout
     assert 'feature_refs_removed: ["quality.spread_quality@1.0.0"]' in result.stdout
     assert 'split_row_deltas: {"test": -10, "train": 20, "val": -10}' in result.stdout
@@ -253,6 +300,10 @@ def test_diff_dataset_cli_resolution_path(monkeypatch, tmp_path: Path) -> None:
     assert "trust_decision_right: accepted for publication with warnings; total=97.25, warnings=1" in result.stdout
     assert 'trust_check_counts_left: {"failed": 0, "passed": 8, "warning": 0}' in result.stdout
     assert 'trust_check_counts_right: {"failed": 0, "passed": 7, "warning": 1}' in result.stdout
+    assert 'quality_caveats_left: {"accepted_caveats": [], "green_blockers": [], "publication_blockers": []}' in result.stdout
+    assert 'quality_caveats_right: {"accepted_caveats": ["expected sparse nulls: htf_context: expected alignment sparsity in H1_tick_count=10"], "green_blockers": ["source_quality below preferred threshold (72.00 < 75.00)"], "publication_blockers": []}' in result.stdout
+    assert 'quality_family_summary_right: {"htf_context": "expected alignment sparsity in H1_tick_count=10"}' in result.stdout
+    assert 'source_quality_metrics_right: {"diagnostic_conflict_mean": 0.0, "diagnostic_dual_source_ratio_mean": 0.0, "merge_diagnostics_days": 2.0, "merge_observability_source": "merge_diagnostics", "state_filled_ratio": 0.0, "state_quality_mean": 72.0}' in result.stdout
     assert 'trust_warning_reasons_added: ["source_quality: score 72.00 is below preferred 75.00"]' in result.stdout
 
 

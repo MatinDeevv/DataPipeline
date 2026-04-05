@@ -74,6 +74,32 @@ def _canonical_ticks(start: dt.datetime) -> pl.DataFrame:
     )
 
 
+def _canonical_ticks_for_bars(
+    start: dt.datetime,
+    rows: int,
+    *,
+    quality_score: float = 0.82,
+    dual_source: bool = False,
+) -> pl.DataFrame:
+    times = [start + dt.timedelta(minutes=i, seconds=10) for i in range(rows)]
+    return pl.DataFrame(
+        {
+            "ts_utc": times,
+            "ts_msc": [int(ts.timestamp() * 1000) for ts in times],
+            "symbol": ["XAUUSD"] * rows,
+            "bid": [3000.0 + i for i in range(rows)],
+            "ask": [3000.2 + i for i in range(rows)],
+            "last": [0.0] * rows,
+            "volume": [1.0] * rows,
+            "source_primary": ["broker_a"] * rows,
+            "source_secondary": ["broker_b" if dual_source else ""] * rows,
+            "merge_mode": ["best" if dual_source else "single"] * rows,
+            "quality_score": [quality_score] * rows,
+            "conflict_flag": [False] * rows,
+        }
+    )
+
+
 def test_tick_state_materialization_builds_disagreement_and_staleness(paths, store) -> None:
     service = StateService(paths, store)
     start = dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC)
@@ -179,6 +205,37 @@ def test_state_manifest_contains_coverage_and_source_quality_metadata(paths, sto
     assert manifest.time_range_start_utc == result.coverage_summary.time_range_start_utc
 
 
+def test_state_materialization_uses_canonical_tick_quality_for_source_quality(paths, store) -> None:
+    service = StateService(paths, store)
+    start = dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC)
+    bars = _bars(start, 6).with_columns(
+        [
+            pl.lit(1).alias("source_count"),
+            pl.lit(0).alias("conflict_count"),
+            pl.lit(0.0).alias("dual_source_ratio"),
+        ]
+    )
+    ticks = _canonical_ticks_for_bars(start, 6, quality_score=0.82, dual_source=False)
+    store.write(bars, paths.built_bars_file("XAUUSD", "M1", start.date()))
+    store.write(ticks, paths.canonical_ticks_file("XAUUSD", start.date()))
+
+    result = service.materialize_state(
+        symbol="XAUUSD",
+        clock="M1",
+        state_version_ref="state.default@1.0.0",
+        date_from=start.date(),
+        date_to=start.date(),
+        build_id="state.test.quality",
+        dataset_spec_ref="dataset.test@1.0.0",
+        code_version="workspace-local-no-git",
+        merge_config_ref="merge.default@test",
+    )
+
+    assert result.source_quality_summary.mean_quality_score >= 80.0
+    assert result.state_df["quality_score"].min() >= 80.0
+    assert result.state_df["source_quality_hint"].min() >= 80.0
+
+
 def test_state_window_materialization_respects_requested_anchor_range_with_prior_warmup(paths, store) -> None:
     service = StateService(paths, store)
     start = dt.datetime(2026, 4, 1, 23, 56, tzinfo=UTC)
@@ -223,6 +280,40 @@ def test_state_window_materialization_respects_requested_anchor_range_with_prior
     assert len(window_result.manifest.input_partition_refs) == 2
 
 
+def test_state_materialization_is_idempotent_for_persisted_state_loads(paths, store) -> None:
+    service = StateService(paths, store)
+    start = dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC)
+    bars = _bars(start, 6)
+    store.write(bars, paths.built_bars_file("XAUUSD", "M1", start.date()))
+
+    first = service.materialize_state(
+        symbol="XAUUSD",
+        clock="M1",
+        state_version_ref="state.default@1.0.0",
+        date_from=start.date(),
+        date_to=start.date(),
+        build_id="state.test.idempotent",
+        dataset_spec_ref="dataset.test@1.0.0",
+        code_version="workspace-local-no-git",
+        merge_config_ref="merge.default@test",
+    )
+    second = service.materialize_state(
+        symbol="XAUUSD",
+        clock="M1",
+        state_version_ref="state.default@1.0.0",
+        date_from=start.date(),
+        date_to=start.date(),
+        build_id="state.test.idempotent",
+        dataset_spec_ref="dataset.test@1.0.0",
+        code_version="workspace-local-no-git",
+        merge_config_ref="merge.default@test",
+    )
+
+    loaded = load_state_artifact(paths, store, second.ref)
+    assert first.state_df.height == second.state_df.height
+    assert loaded.height == second.state_df.height
+
+
 def test_state_window_materialization_is_deterministic_for_repeated_requests(paths, store) -> None:
     service = StateService(paths, store)
     start = dt.datetime(2026, 4, 1, 23, 56, tzinfo=UTC)
@@ -258,6 +349,8 @@ def test_state_window_materialization_is_deterministic_for_repeated_requests(pat
     assert first.ref.artifact_id == second.ref.artifact_id
     assert first.manifest.content_hash == second.manifest.content_hash
     assert first.window_df.equals(second.window_df)
+    loaded = load_state_window_artifact(paths, store, second.ref)
+    assert loaded.height == second.window_df.height
 
 
 def test_state_window_materialization_rejects_request_outside_source_range(paths, store) -> None:

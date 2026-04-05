@@ -5,7 +5,7 @@ from __future__ import annotations
 import polars as pl
 
 from mt5pipe.features.internal.family_utils import (
-    apply_warmup_mask,
+    apply_column_warmups,
     ensure_output_columns,
     finite_or_null,
     has_all_columns,
@@ -101,7 +101,17 @@ def add_event_shape_features(
 
     working = working.drop(["_silence_event", "_rolling_abs_path", "_rolling_net_path", "_direction_switch_event"])
     working = ensure_output_columns(working, OUTPUT_TYPES)
-    return apply_warmup_mask(working, OUTPUT_TYPES, warmup_rows=window)
+    return apply_column_warmups(
+        working,
+        OUTPUT_TYPES,
+        warmup_rows_by_column={
+            "burstiness_20": window,
+            "silence_ratio_20": window,
+            "direction_switch_rate_20": window,
+            "path_efficiency_20": window,
+            "tortuosity_20": window,
+        },
+    )
 
 
 def _column_or_value(df: pl.DataFrame, *, preferred: list[str], default: float) -> pl.Expr:

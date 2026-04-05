@@ -5,7 +5,7 @@ from __future__ import annotations
 import polars as pl
 
 from mt5pipe.features.internal.family_utils import (
-    apply_warmup_mask,
+    apply_column_warmups,
     ensure_output_columns,
     finite_or_null,
     has_all_columns,
@@ -132,7 +132,17 @@ def add_disagreement_features(
 
     working = working.drop(["_dual_source_gap", "_conflict_event", "_secondary_gap_ratio", "_conflict_ratio"])
     working = ensure_output_columns(working, OUTPUT_TYPES)
-    return apply_warmup_mask(working, OUTPUT_TYPES, warmup_rows=max(zscore_window, burst_window, entropy_window))
+    return apply_column_warmups(
+        working,
+        OUTPUT_TYPES,
+        warmup_rows_by_column={
+            "disagreement_burst_15": burst_window,
+            "conflict_burst_15": burst_window,
+            "staleness_asymmetry_15": burst_window,
+            "disagreement_entropy_30": entropy_window,
+            "disagreement_zscore_60": zscore_window,
+        },
+    )
 
 
 def _has_required_inputs(df: pl.DataFrame) -> bool:

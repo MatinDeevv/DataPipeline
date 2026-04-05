@@ -70,6 +70,17 @@ def test_phase4_registry_resolves_multiscale_and_hardened_families() -> None:
         assert spec.output_columns
         assert spec.dependencies
 
+    disagreement_spec = _machine_native_spec("disagreement")
+    assert disagreement_spec.output_columns == [
+        "mid_divergence_proxy_bps",
+        "disagreement_pressure_bps",
+        "disagreement_zscore_60",
+        "disagreement_burst_15",
+    ]
+
+    htf_spec = next(spec for spec in get_default_feature_specs() if spec.family == "htf_context")
+    assert all(not column.endswith("_tick_count") for column in htf_spec.output_columns)
+
 
 @pytest.mark.parametrize(
     ("family", "builder", "builder_kwargs", "missing_columns"),
@@ -97,27 +108,75 @@ def test_machine_native_families_return_null_columns_when_core_inputs_are_missin
 
 
 @pytest.mark.parametrize(
-    ("family", "builder", "builder_kwargs"),
+    ("family", "builder", "builder_kwargs", "expected_warmups"),
     [
-        ("disagreement", add_disagreement_features, {}),
-        ("event_shape", add_event_shape_features, {"bar_duration_seconds": 60}),
-        ("entropy", add_entropy_features, {}),
-        ("multiscale", add_multiscale_features, {}),
+        (
+            "disagreement",
+            add_disagreement_features,
+            {},
+            {
+                "mid_divergence_proxy_bps": 0,
+                "disagreement_pressure_bps": 0,
+                "disagreement_burst_15": 14,
+                "disagreement_zscore_60": 59,
+            },
+        ),
+        (
+            "event_shape",
+            add_event_shape_features,
+            {"bar_duration_seconds": 60},
+            {
+                "tick_rate_hz": 0,
+                "interarrival_mean_ms": 0,
+                "signed_run_length": 0,
+                "burstiness_20": 19,
+                "silence_ratio_20": 19,
+                "direction_switch_rate_20": 19,
+                "path_efficiency_20": 19,
+                "tortuosity_20": 19,
+            },
+        ),
+        (
+            "entropy",
+            add_entropy_features,
+            {},
+            {
+                "return_sign_shannon_entropy_30": 29,
+                "return_permutation_entropy_30": 29,
+                "return_sample_entropy_30": 29,
+                "volatility_approx_entropy_30": 29,
+            },
+        ),
+        (
+            "multiscale",
+            add_multiscale_features,
+            {},
+            {
+                "trend_alignment_5_15_60": 59,
+                "return_energy_ratio_5_60": 59,
+                "volatility_ratio_5_60": 59,
+                "range_expansion_ratio_15_60": 59,
+                "tick_intensity_ratio_5_60": 59,
+            },
+        ),
     ],
 )
-def test_machine_native_families_null_all_outputs_during_warmup(
+def test_machine_native_families_enforce_expected_warmups(
     family: str,
     builder,
     builder_kwargs: dict[str, object],
+    expected_warmups: dict[str, int],
 ) -> None:
     frame = _phase4_input_frame()
     spec = _machine_native_spec(family)
 
     result = builder(frame, **builder_kwargs)
 
-    for column in spec.output_columns:
-        assert result[column][: spec.warmup_rows - 1].is_null().all()
-    assert any(result[column][spec.warmup_rows + 10] is not None for column in spec.output_columns)
+    assert set(spec.output_columns) == set(expected_warmups)
+    for column, null_prefix_rows in expected_warmups.items():
+        if null_prefix_rows > 0:
+            assert result[column][:null_prefix_rows].is_null().all()
+        assert result[column][null_prefix_rows] is not None
 
 
 def test_multiscale_builder_outputs_registered_columns_and_is_point_in_time_safe() -> None:
@@ -178,7 +237,55 @@ def test_label_diagnostics_report_tail_nulls_and_class_balance() -> None:
     assert diagnostics["purge_rows"] == pack.purge_rows
     assert diagnostics["recommended_min_embargo_rows"] == pack.purge_rows
     assert diagnostics["exclusions"] == pack.exclusions
+    assert {
+        "direction_5m",
+        "direction_15m",
+        "direction_60m",
+        "triple_barrier_5m",
+        "triple_barrier_15m",
+        "triple_barrier_60m",
+    }.issubset(set(diagnostics["constant_output_columns"]))
     assert diagnostics["horizon_summaries"]["5m"]["future_return_null_rows"] == 5
     assert diagnostics["horizon_summaries"]["5m"]["direction_null_rows"] == 5
     assert diagnostics["horizon_summaries"]["5m"]["triple_barrier_null_rows"] == 5
     assert set(diagnostics["horizon_summaries"]["5m"]["triple_barrier_class_balance"]) == {"-1", "0", "1"}
+
+
+def test_label_diagnostics_surface_constant_output_columns() -> None:
+    pack = resolve_label_pack("core_tb_volscaled@1.0.0")
+    label_df = pl.DataFrame(
+        {
+            "symbol": ["XAUUSD"] * 4,
+            "timeframe": ["M1"] * 4,
+            "time_utc": [dt.datetime(2026, 4, 2, 0, idx, tzinfo=UTC) for idx in range(4)],
+            "future_return_5m": [0.1, 0.2, 0.3, 0.4],
+            "direction_5m": [1, 1, 1, 1],
+            "triple_barrier_5m": [0, 0, 0, 0],
+            "mae_5m": [0.02, 0.02, 0.02, 0.02],
+            "mfe_5m": [0.03, 0.03, 0.03, 0.03],
+            "future_return_15m": [0.1, 0.2, 0.3, None],
+            "direction_15m": [1, 1, 0, None],
+            "triple_barrier_15m": [1, 0, -1, None],
+            "mae_15m": [0.02, 0.03, 0.04, None],
+            "mfe_15m": [0.03, 0.04, 0.05, None],
+            "future_return_60m": [0.1, 0.0, -0.1, None],
+            "direction_60m": [1, 0, -1, None],
+            "triple_barrier_60m": [1, 0, -1, None],
+            "mae_60m": [0.02, 0.03, 0.04, None],
+            "mfe_60m": [0.03, 0.04, 0.05, None],
+            "future_return_240m": [None, None, None, None],
+            "direction_240m": [None, None, None, None],
+            "triple_barrier_240m": [None, None, None, None],
+            "mae_240m": [None, None, None, None],
+            "mfe_240m": [None, None, None, None],
+        }
+    ).select(["symbol", "timeframe", "time_utc", *pack.output_columns])
+
+    diagnostics = _label_manifest_diagnostics(label_df, pack)
+
+    assert diagnostics["constant_output_columns"] == [
+        "direction_5m",
+        "mae_5m",
+        "mfe_5m",
+        "triple_barrier_5m",
+    ]

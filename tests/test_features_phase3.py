@@ -97,10 +97,20 @@ def test_event_shape_builder_outputs_registered_columns_and_warmup() -> None:
     spec = next(spec for spec in get_default_feature_specs_direct() if spec.family == "event_shape")
 
     result = add_event_shape_features(frame, bar_duration_seconds=60)
+    rolling_columns = {
+        "burstiness_20",
+        "silence_ratio_20",
+        "direction_switch_rate_20",
+        "path_efficiency_20",
+        "tortuosity_20",
+    }
 
     for column in spec.output_columns:
         assert column in result.columns
-        assert result[column][:19].is_null().all()
+        if column in rolling_columns:
+            assert result[column][:19].is_null().all()
+        else:
+            assert result[column][0] is not None
     assert result["signed_run_length"][30] is not None
 
 
@@ -146,7 +156,7 @@ def test_phase3_feature_builders_are_point_in_time_safe() -> None:
     for column in [
         "disagreement_pressure_bps",
         "disagreement_zscore_60",
-        "conflict_burst_15",
+        "disagreement_burst_15",
         "direction_switch_rate_20",
         "path_efficiency_20",
         "return_permutation_entropy_30",

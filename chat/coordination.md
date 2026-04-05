@@ -141,3 +141,36 @@ summary: Audited the nonhuman dataset path and fixed the remaining state-side re
 needs: Agent 2 can assume requested window artifacts no longer leak anchors from earlier source dates. Agent 3 can assume window lineage/input refs cover the full source range actually used for warmup.
 files: mt5pipe/state/service.py, tests/test_state_windows.py
 ```
+
+### [2026-04-04 23:34] Agent 3 - Phase 4 cleanup checkpoint
+
+```
+agent: agent_3
+type: handoff
+area: compiler
+summary: Phase 4 cleanup is now green on the live workspace. xau_m1_nonhuman_v1 compiles, publishes, inspects, and diffs cleanly over 2024-02-26..2024-03-01 with no trust warnings. Truth now separates accepted caveats from real blockers, and CLI summaries surface those caveats plus source-quality context directly.
+needs: No immediate blocker for Agent 1 or Agent 2. Remaining accepted caveats are slice-trivial constants only: base/source conflict_count-style columns, 2/3 quality outputs on this slice, and one 5m label column. Current source_quality is 77.2389, above the preferred 75.00 threshold, so it is no longer a checkpoint blocker.
+files: mt5pipe/truth/service.py, mt5pipe/cli/dataset_cmds.py, tests/test_truth_core.py, tests/test_dataset_cli_compat.py, config/datasets/xau_m1_nonhuman_v1.yaml
+verification: pytest tests/test_compiler.py tests/test_truth_core.py tests/test_catalog.py tests/test_dataset_cli_compat.py -q -> 18 passed; python -m mt5pipe.cli.app dataset compile-dataset --spec config/datasets/xau_m1_core_v1.yaml --publish -> published accepted 97.72; python -m mt5pipe.cli.app dataset compile-dataset --spec config/datasets/xau_m1_nonhuman_v1.yaml --publish -> published accepted 97.72; inspect/diff by dataset:// refs show zero warnings, source_quality=77.2389, and accepted_caveats only
+```
+
+### [2026-04-04 23:33] Agent 2 - stable selector cleanup handoff
+
+```
+agent: agent_2
+type: handoff
+area: features
+summary: Cleaned the stable selector surface for the nonhuman path without changing family names. htf_context/* no longer publishes *_tick_count columns, disagreement/* now publishes only mid_divergence_proxy_bps, disagreement_pressure_bps, disagreement_zscore_60, and disagreement_burst_15, and event/disagreement warmup is now column-level rather than blanket family-wide.
+needs: Agent 3 can keep using time/session/quality/htf_context/disagreement/event_shape/entropy/multiscale selectors as stable. Do not expect HTF tick-count columns in stable feature artifacts, and treat label manifest metadata.label_diagnostics.constant_output_columns as the source of truth for slice-trivial labels.
+files: mt5pipe/features/registry/defaults.py, mt5pipe/features/disagreement/builders.py, mt5pipe/features/event_shape/builders.py, mt5pipe/labels/service.py, tests/test_features_phase3.py, tests/test_features_phase4.py
+```
+### [2026-04-04 23:32] Agent 1 - Phase 4 cleanup state quality handoff
+
+```
+agent: agent_1
+type: handoff
+area: state
+summary: Fixed the main avoidable state-side quality issue on the current nonhuman range. Persisted state/state-window artifacts are now rewritten idempotently and loaders deduplicate stable keys, while bar-backed state quality now uses canonical tick quality/conflict/dual-source evidence when available instead of only coarse bar heuristics.
+needs: Agent 3 should note one external blocker remains outside state ownership: the current full compiler suite still trips in mt5pipe.truth.service on a missing _quality_caveat_summary helper. Focused state tests are green and live state materialization quality on 2024-02-26..2024-03-01 improved materially after the state cleanup.
+files: mt5pipe/state/service.py, tests/test_state_windows.py
+```

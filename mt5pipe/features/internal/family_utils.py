@@ -73,6 +73,33 @@ def apply_warmup_mask(
     return working.with_columns(expressions).drop("_feature_row_nr")
 
 
+def apply_column_warmups(
+    df: pl.DataFrame,
+    output_types: dict[str, pl.DataType],
+    *,
+    warmup_rows_by_column: dict[str, int],
+) -> pl.DataFrame:
+    """Null out outputs according to per-column warmup requirements."""
+    working = ensure_output_columns(df, output_types)
+    if working.is_empty():
+        return working
+
+    working = working.with_row_index("_feature_row_nr")
+    expressions: list[pl.Expr] = []
+    for column, dtype in output_types.items():
+        warmup_rows = warmup_rows_by_column.get(column, 0)
+        if warmup_rows <= 1:
+            expressions.append(pl.col(column).cast(dtype).alias(column))
+            continue
+        expressions.append(
+            pl.when(pl.col("_feature_row_nr") < warmup_rows - 1)
+            .then(pl.lit(None, dtype=dtype))
+            .otherwise(pl.col(column).cast(dtype))
+            .alias(column)
+        )
+    return working.with_columns(expressions).drop("_feature_row_nr")
+
+
 def safe_ratio_expr(
     numerator: pl.Expr,
     denominator: pl.Expr,

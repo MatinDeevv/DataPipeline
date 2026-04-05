@@ -233,20 +233,91 @@ def _trust_check_counts(result: Any) -> dict[str, Any]:
     return {str(key): value for key, value in _as_dict(counts).items()}
 
 
+def _quality_caveats(result: Any) -> dict[str, Any]:
+    summary = _as_dict(_first_present(result, "trust_report.metrics.quality_caveat_summary", default={}))
+    return {
+        "accepted_caveats": [str(value) for value in _as_list(summary.get("accepted_caveats"))],
+        "green_blockers": [str(value) for value in _as_list(summary.get("green_blockers"))],
+        "publication_blockers": [str(value) for value in _as_list(summary.get("publication_blockers"))],
+    }
+
+
+def _quality_family_summary(result: Any) -> dict[str, Any]:
+    family_notes = _as_dict(
+        _first_present(
+            result,
+            "trust_report.metrics.quality_caveat_summary.family_warning_summary",
+            "trust_report.metrics.dataset_quality.family_warning_summary",
+            default={},
+        )
+    )
+    return {
+        str(family): str(_as_list(notes)[0])
+        for family, notes in sorted(family_notes.items())
+        if _as_list(notes)
+    }
+
+
+def _source_quality_metrics(result: Any) -> dict[str, Any]:
+    metrics = _as_dict(_first_present(result, "trust_report.metrics.source_quality", default={}))
+    keys = [
+        "merge_observability_source",
+        "merge_qa_days",
+        "merge_diagnostics_days",
+        "state_quality_mean",
+        "state_filled_ratio",
+        "dual_source_ratio_mean",
+        "diagnostic_dual_source_ratio_mean",
+        "merge_conflict_mean",
+        "diagnostic_conflict_mean",
+    ]
+    return {
+        key: metrics[key]
+        for key in keys
+        if key in metrics
+    }
+
+
 def _dataset_quality_alerts(result: Any) -> dict[str, Any]:
     metrics = _as_dict(_first_present(result, "trust_report.metrics.dataset_quality", default={}))
     null_columns = {
         str(key): value
         for key, value in sorted(_as_dict(metrics.get("null_columns", {})).items())
     }
+    expected_sparse_null_columns = {
+        str(key): _as_dict(value).get("null_count")
+        for key, value in sorted(_as_dict(metrics.get("expected_sparse_null_columns", {})).items())
+    }
+    unexpected_null_columns = {
+        str(key): _as_dict(value).get("null_count")
+        for key, value in sorted(_as_dict(metrics.get("unexpected_null_columns", {})).items())
+    }
     constant_columns = sorted(str(value) for value in _as_list(metrics.get("constant_columns", [])))
-    if not metrics and not null_columns and not constant_columns:
+    slice_trivial_constant_columns = sorted(
+        str(key) for key in _as_dict(metrics.get("slice_trivial_constant_columns", {}))
+    )
+    blocking_constant_columns = sorted(
+        str(key) for key in _as_dict(metrics.get("blocking_constant_columns", {}))
+    )
+    if (
+        not metrics
+        and not null_columns
+        and not constant_columns
+        and not expected_sparse_null_columns
+        and not unexpected_null_columns
+        and not slice_trivial_constant_columns
+        and not blocking_constant_columns
+    ):
         return {}
     return {
         "quality_score": metrics.get("quality_score"),
         "total_nulls": metrics.get("total_nulls"),
         "null_columns_sample": dict(list(null_columns.items())[:5]),
+        "expected_sparse_null_columns_sample": dict(list(expected_sparse_null_columns.items())[:5]),
+        "unexpected_null_columns_sample": dict(list(unexpected_null_columns.items())[:5]),
         "constant_columns_sample": constant_columns[:5],
+        "slice_trivial_constant_columns_sample": slice_trivial_constant_columns[:5],
+        "blocking_constant_columns_sample": blocking_constant_columns[:5],
     }
 
 
@@ -286,6 +357,8 @@ def _compile_result_lines(result: Any) -> list[str]:
         f"trust_check_counts: {_json(_trust_check_counts(result))}",
         f"trust_warning_reasons: {_json(_trust_warning_reasons(result))}",
         f"trust_rejection_reasons: {_json(_trust_rejection_reasons(result))}",
+        f"quality_caveats: {_json(_quality_caveats(result))}",
+        f"source_quality_metrics: {_json(_source_quality_metrics(result))}",
         f"published_ref: {published_ref or '-'}",
     ]
 
@@ -316,6 +389,9 @@ def _inspect_result_lines(result: Any) -> list[str]:
         f"trust_warning_reasons: {_json(_trust_warning_reasons(result))}",
         f"trust_rejection_reasons: {_json(_trust_rejection_reasons(result))}",
         f"trust_breakdown: {_json(_trust_breakdown(result))}",
+        f"quality_caveats: {_json(_quality_caveats(result))}",
+        f"quality_family_summary: {_json(_quality_family_summary(result))}",
+        f"source_quality_metrics: {_json(_source_quality_metrics(result))}",
         f"dataset_quality_alerts: {_json(_dataset_quality_alerts(result))}",
         f"lineage_refs: {_json(_lineage_refs(result))}",
     ]
@@ -355,6 +431,8 @@ def _diff_result_lines(result: Any) -> list[str]:
         f"right_spec_ref: {_dataset_spec_ref(right)}",
         f"feature_selectors_left: {_json(_feature_selectors(left))}",
         f"feature_selectors_right: {_json(_feature_selectors(right))}",
+        f"feature_families_left: {_json(_feature_families(left))}",
+        f"feature_families_right: {_json(_feature_families(right))}",
         f"feature_refs_added: {_json(sorted(right_features - left_features))}",
         f"feature_refs_removed: {_json(sorted(left_features - right_features))}",
         f"feature_artifact_refs_left: {_json(_feature_artifact_refs(left))}",
@@ -380,6 +458,12 @@ def _diff_result_lines(result: Any) -> list[str]:
         f"trust_check_counts_right: {_json(_trust_check_counts(right))}",
         f"trust_breakdown_left: {_json(_trust_breakdown(left))}",
         f"trust_breakdown_right: {_json(_trust_breakdown(right))}",
+        f"quality_caveats_left: {_json(_quality_caveats(left))}",
+        f"quality_caveats_right: {_json(_quality_caveats(right))}",
+        f"quality_family_summary_left: {_json(_quality_family_summary(left))}",
+        f"quality_family_summary_right: {_json(_quality_family_summary(right))}",
+        f"source_quality_metrics_left: {_json(_source_quality_metrics(left))}",
+        f"source_quality_metrics_right: {_json(_source_quality_metrics(right))}",
         f"trust_warning_reasons_added: {_json(sorted(set(_trust_warning_reasons(right)) - set(_trust_warning_reasons(left))))}",
         f"trust_warning_reasons_removed: {_json(sorted(set(_trust_warning_reasons(left)) - set(_trust_warning_reasons(right))))}",
         f"trust_rejection_reasons_added: {_json(sorted(set(_trust_rejection_reasons(right)) - set(_trust_rejection_reasons(left))))}",

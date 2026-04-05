@@ -58,3 +58,13 @@ area: state
 update: audited the current nonhuman dataset path against state-only risks. No remaining state-side blocker showed up in the compiler-backed nonhuman tests; the one real reliability issue was state-window behavior when a wider source artifact was used for a narrower request.
 update: materialize_state_windows now enforces that request dates lie within the source ref range, uses the full source range for PIT-safe warmup context, filters emitted anchors back to the requested date range, and records lineage/input refs for the full source range actually used.
 handoff: boundary changed only in behavior, not symbols. Agent 2 can now assume state-window artifacts match requested anchor dates while still preserving prior-day warmup context. Agent 3 can now assume state-window manifests/input refs cover the actual source partitions used for those windows.
+[2026-04-04T23:15:18-04:00]
+feedback_read: yes
+feedback_source: feedbacks/latest.md
+feedback_summary: Phase 4 cleanup should stay narrow: improve state-side quality and metadata so the current nonhuman dataset path is more trustworthy without architecture churn. I am focusing on state source-quality signals, overlap/staleness/conflict annotations, and avoidable null propagation into the current dataset path.
+phase: Phase 4 cleanup
+area: state
+[2026-04-04T23:32:00-04:00]
+update: cleaned up state-side artifact reliability for the current nonhuman path. State partition writes are now idempotent and public state/window loaders deduplicate persisted rows on stable keys, so repeated materialization no longer inflates persisted artifacts.
+update: bar-backed state quality/source_quality_hint now prefer canonical tick quality evidence when it exists, instead of relying only on coarse single-source bar heuristics. This materially improves the state-side source_quality inputs available to downstream truth without changing public symbols.
+handoff: no public boundary symbols changed. Agent 2/3 can treat persisted state/state-window loads as idempotent and can rely on higher-fidelity state quality signals on the current synchronized range.

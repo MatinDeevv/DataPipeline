@@ -121,3 +121,38 @@ needs: Checkpoint status is yellow rather than fully green because the live acce
 files: mt5pipe/compiler/service.py, mt5pipe/truth/service.py, mt5pipe/cli/dataset_cmds.py, config/datasets/xau_m1_nonhuman_v1.yaml, config/datasets/xau_m1_core_v1.yaml, tests/test_compiler.py, tests/test_truth_core.py, tests/test_dataset_cli_compat.py, docs/parallel_dev_architecture.md, chat/contracts.md
 verification: pytest tests/test_compiler.py tests/test_truth_core.py tests/test_catalog.py tests/test_dataset_cli_compat.py -q -> 16 passed; python -m mt5pipe.cli.app dataset compile-dataset --spec config/datasets/xau_m1_core_v1.yaml --publish -> published/accepted 96.28; python -m mt5pipe.cli.app dataset compile-dataset --spec config/datasets/xau_m1_nonhuman_v1.yaml --publish -> published/accepted 96.28; inspect/diff by dataset:// refs returned deterministic trust decision/check-count/reason summaries
 ```
+
+### [2026-04-04 23:15:37 -04:00] agent_3 - phase4 cleanup start
+
+feedback_read: yes
+feedback_source: feedbacks/latest.md
+feedback_summary: The cleanup pass should keep the current stable selector path and make the yellow issues more truthful, not quieter. The goal is a cleaner checkpoint answer around source quality, expected sparsity, and constant-column usefulness.
+phase: Phase 4 cleanup
+area: compiler|truth|catalog|cli
+
+```
+agent: agent_3
+type: update
+area: compiler/truth/catalog/cli
+summary: Starting the Phase 4 cleanup pass as checkpoint owner. I am re-evaluating xau_m1_nonhuman_v1 on the current stable selector set and tightening truth/inspect/diff classification around weak source quality, expected sparse columns, and slice-trivial constants.
+needs: Will keep the spec on the stable registry-materialized selector path confirmed by Agent 2 and will not weaken publication gates to chase a greener badge.
+files: feedbacks/latest.md, chat/contracts.md, chat/coordination.md, chat/agent_3.md, mt5pipe/state/public.py, mt5pipe/features/public.py, mt5pipe/labels/public.py, mt5pipe/compiler/public.py
+```
+
+### [2026-04-04 23:34:05 -04:00] agent_3 - phase4 cleanup complete
+
+feedback_read: yes
+feedback_source: feedbacks/latest.md
+feedback_summary: The cleanup pass should keep the stable selector path and make yellow issues more truthful instead of quieter. The goal is a stronger checkpoint answer around source quality, expected sparsity, and constant-column usefulness.
+phase: Phase 4 cleanup
+area: compiler|truth|catalog|cli
+
+```
+agent: agent_3
+type: completion
+area: compiler/truth/catalog/cli
+summary: Reclassified expected sparse nulls and slice-trivial constants as accepted caveats, preserved unexpected nulls/blocking constants/source-quality shortfalls as explicit blockers, and surfaced the new truth summaries through compile-dataset, inspect-dataset, and diff-dataset. Fresh live workspace runs now show xau_m1_nonhuman_v1 as a green checkpoint rather than yellow.
+needs: None for this checkpoint. Remaining caveats are accepted slice-trivial constants only, and current source_quality is 77.2389 so it is no longer below the preferred threshold.
+files: mt5pipe/truth/service.py, mt5pipe/cli/dataset_cmds.py, tests/test_truth_core.py, tests/test_dataset_cli_compat.py, chat/contracts.md, chat/coordination.md, docs/parallel_dev_architecture.md
+verification: pytest tests/test_compiler.py tests/test_truth_core.py tests/test_catalog.py tests/test_dataset_cli_compat.py -q -> 18 passed; python -m mt5pipe.cli.app dataset compile-dataset --spec config/datasets/xau_m1_core_v1.yaml --publish -> dataset.xau_m1_core.01db30739cac published accepted 97.72; python -m mt5pipe.cli.app dataset compile-dataset --spec config/datasets/xau_m1_nonhuman_v1.yaml --publish -> dataset.xau_m1_nonhuman.1af51fbdf628 published accepted 97.72; inspect/diff on dataset://xau_m1_nonhuman@1.0.0 show trust_warning_reasons=[], source_quality=77.2389, accepted_caveats only
+```

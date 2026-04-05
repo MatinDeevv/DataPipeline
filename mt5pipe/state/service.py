@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -100,6 +101,13 @@ class StateService:
             )
 
         normalized_base = self._normalize_base_bars(base_df, clock)
+        normalized_base = self._enrich_base_bars_with_canonical_quality(
+            symbol=symbol,
+            clock=clock,
+            date_from=date_from,
+            date_to=date_to,
+            base_df=normalized_base,
+        )
         state_df = self._build_bar_state_rows(symbol, clock, state_version_ref, normalized_base)
         input_partition_refs = self._collect_bar_input_partition_refs(symbol, clock, date_from, date_to)
         return self._persist_state_artifact(
@@ -193,7 +201,11 @@ class StateService:
             current += dt.timedelta(days=1)
         if not frames:
             return pl.DataFrame()
-        return pl.concat(frames, how="diagonal_relaxed").sort("ts_utc")
+        state_df = pl.concat(frames, how="diagonal_relaxed")
+        dedup_cols = [column for column in ["symbol", "clock", "ts_utc", "ts_msc"] if column in state_df.columns]
+        if dedup_cols:
+            state_df = state_df.unique(subset=dedup_cols, keep="last")
+        return state_df.sort("ts_utc")
 
     def materialize_state_windows(
         self,
@@ -369,7 +381,11 @@ class StateService:
             current += dt.timedelta(days=1)
         if not frames:
             return pl.DataFrame()
-        return pl.concat(frames, how="diagonal_relaxed").sort("anchor_ts_utc")
+        window_df = pl.concat(frames, how="diagonal_relaxed")
+        dedup_cols = [column for column in ["window_id", "symbol", "clock", "window_size", "anchor_ts_utc"] if column in window_df.columns]
+        if dedup_cols:
+            window_df = window_df.unique(subset=dedup_cols, keep="last")
+        return window_df.sort("anchor_ts_utc")
 
     def _persist_state_artifact(
         self,
@@ -497,6 +513,76 @@ class StateService:
             normalized = normalized.with_columns(pl.lit(False).alias("_filled"))
         return normalized.sort("time_utc")
 
+    def _enrich_base_bars_with_canonical_quality(
+        self,
+        *,
+        symbol: str,
+        clock: str,
+        date_from: dt.date,
+        date_to: dt.date,
+        base_df: pl.DataFrame,
+    ) -> pl.DataFrame:
+        if base_df.is_empty():
+            return base_df
+
+        tick_metrics = self._canonical_bar_quality_metrics(symbol=symbol, clock=clock, date_from=date_from, date_to=date_to)
+        if tick_metrics.is_empty():
+            return base_df
+        return base_df.join(tick_metrics, on="time_utc", how="left")
+
+    def _canonical_bar_quality_metrics(
+        self,
+        *,
+        symbol: str,
+        clock: str,
+        date_from: dt.date,
+        date_to: dt.date,
+    ) -> pl.DataFrame:
+        if clock in {"W1", "MN1"}:
+            return pl.DataFrame()
+
+        tf_seconds = timeframe_to_seconds(clock)
+        frames: list[pl.DataFrame] = []
+        current = date_from
+        while current <= date_to:
+            day = self._store.read_dir(self._paths.canonical_ticks_dir(symbol, current))
+            if not day.is_empty():
+                frames.append(day)
+            current += dt.timedelta(days=1)
+        if not frames:
+            return pl.DataFrame()
+
+        ticks = pl.concat(frames, how="diagonal_relaxed")
+        required = {"ts_msc", "quality_score"}
+        if not required.issubset(set(ticks.columns)):
+            return pl.DataFrame()
+
+        dual_expr = (
+            (pl.col("source_secondary").fill_null("") != "")
+            | (pl.col("merge_mode").fill_null("") == "best")
+        ) if {"source_secondary", "merge_mode"}.issubset(set(ticks.columns)) else pl.lit(False)
+        conflict_expr = pl.col("conflict_flag").cast(pl.Float64) if "conflict_flag" in ticks.columns else pl.lit(0.0)
+        quality_expr = pl.when(pl.col("quality_score") <= 1.5).then(pl.col("quality_score") * 100.0).otherwise(pl.col("quality_score"))
+
+        return (
+            ticks.with_columns([
+                pl.from_epoch((pl.col("ts_msc") // (tf_seconds * 1000)) * (tf_seconds * 1000), time_unit="ms")
+                .dt.replace_time_zone("UTC")
+                .alias("time_utc"),
+                dual_expr.cast(pl.Float64).alias("_tick_dual_source_flag"),
+                quality_expr.cast(pl.Float64).alias("_tick_quality_score_100"),
+                conflict_expr.alias("_tick_conflict_flag"),
+            ])
+            .group_by("time_utc")
+            .agg([
+                pl.col("_tick_quality_score_100").mean().alias("_canonical_quality_mean"),
+                pl.col("_tick_dual_source_flag").mean().alias("_canonical_dual_source_ratio"),
+                pl.col("_tick_dual_source_flag").max().cast(pl.Int64).alias("_canonical_dual_source_present"),
+                pl.col("_tick_conflict_flag").mean().alias("_canonical_conflict_ratio"),
+            ])
+            .sort("time_utc")
+        )
+
     def _build_bar_state_rows(
         self,
         symbol: str,
@@ -520,24 +606,38 @@ class StateService:
             gap_fill_flag = bool(row.get("_filled", False))
             raw_source_count = row.get("source_count", 1)
             source_count = int(raw_source_count) if raw_source_count is not None else (0 if gap_fill_flag else 1)
+            canonical_dual_present = int(row.get("_canonical_dual_source_present", 0) or 0)
+            if source_count < 2 and canonical_dual_present > 0:
+                source_count = 2
             conflict_count = int(row.get("conflict_count", 0) or 0)
+            canonical_conflict_ratio = row.get("_canonical_conflict_ratio")
+            if conflict_count <= 0 and canonical_conflict_ratio is not None and float(canonical_conflict_ratio) > 0.0:
+                conflict_count = 1
             dual_ratio = row.get("dual_source_ratio")
-            dual_ratio_f = float(dual_ratio) if dual_ratio is not None else None
+            ts_msc = int(ts_utc.timestamp() * 1000)
+            observed_interval_ms = 0 if prev_ts_msc is None else max(ts_msc - prev_ts_msc, 0)
+            primary_staleness_ms = observed_interval_ms
+            prev_ts_msc = ts_msc
+            canonical_quality_mean = row.get("_canonical_quality_mean")
+            canonical_quality_f = float(canonical_quality_mean) if canonical_quality_mean is not None else None
+            canonical_dual_ratio = row.get("_canonical_dual_source_ratio")
+            dual_ratio_f = float(canonical_dual_ratio) if canonical_dual_ratio is not None else (float(dual_ratio) if dual_ratio is not None else None)
             merge_mode = "conflict" if conflict_count > 0 else "best" if source_count >= 2 else "single"
             quality_score = self._quality_score(
                 source_count=source_count,
                 conflict_count=conflict_count,
                 dual_source_ratio=dual_ratio_f,
                 filled=gap_fill_flag,
+                canonical_quality_score=canonical_quality_f,
+                observed_interval_ms=observed_interval_ms,
+                expected_interval_ms=expected_interval_ms,
             )
-            ts_msc = int(ts_utc.timestamp() * 1000)
-            observed_interval_ms = 0 if prev_ts_msc is None else max(ts_msc - prev_ts_msc, 0)
-            primary_staleness_ms = observed_interval_ms
-            prev_ts_msc = ts_msc
             observed_observations = 0 if gap_fill_flag else 1
             missing_observations = 1 - observed_observations
             window_completeness = float(observed_observations)
-            source_quality_hint = quality_score if not gap_fill_flag else max(0.0, quality_score * 0.5)
+            source_quality_hint = canonical_quality_f if canonical_quality_f is not None else quality_score
+            if gap_fill_flag:
+                source_quality_hint = max(0.0, source_quality_hint * 0.7)
             source_participation_score = snapshot_source_participation_score(
                 source_count=source_count,
                 conflict_flag=conflict_count > 0,
@@ -668,6 +768,7 @@ class StateService:
         dated = state_df.with_columns(pl.col("ts_utc").dt.date().alias("_date"))
         for date_val in dated["_date"].unique().sort().to_list():
             day_df = dated.filter(pl.col("_date") == date_val).drop("_date")
+            self._reset_partition_dir(self._paths.state_dir(symbol, clock, date_val, state_version_ref))
             self._store.write(day_df, self._paths.state_file(symbol, clock, date_val, state_version_ref))
 
     def _write_state_window_partitions(
@@ -683,10 +784,16 @@ class StateService:
         dated = window_df.with_columns(pl.col("anchor_ts_utc").dt.date().alias("_date"))
         for date_val in dated["_date"].unique().sort().to_list():
             day_df = dated.filter(pl.col("_date") == date_val).drop("_date")
+            self._reset_partition_dir(self._paths.state_window_dir(symbol, clock, date_val, state_version, window_size))
             self._store.write(
                 day_df,
                 self._paths.state_window_file(symbol, clock, date_val, state_version, window_size),
             )
+
+    @staticmethod
+    def _reset_partition_dir(directory: Path) -> None:
+        if directory.exists():
+            shutil.rmtree(directory)
 
     @staticmethod
     def _validate_request_date_range(
@@ -746,12 +853,28 @@ class StateService:
         conflict_count: int,
         dual_source_ratio: float | None,
         filled: bool,
+        canonical_quality_score: float | None,
+        observed_interval_ms: int,
+        expected_interval_ms: int,
     ) -> float:
-        dual_component = min(max(dual_source_ratio or 0.0, 0.0) * 25.0, 25.0)
-        source_component = 10.0 if source_count >= 2 else 0.0
-        conflict_penalty = 20.0 if conflict_count > 0 else 0.0
-        filled_penalty = 30.0 if filled else 0.0
-        return max(0.0, min(100.0, 65.0 + dual_component + source_component - conflict_penalty - filled_penalty))
+        if canonical_quality_score is not None:
+            base = max(0.0, min(float(canonical_quality_score), 100.0))
+        else:
+            base = 78.0 if source_count <= 1 else 84.0
+
+        dual_component = min(max(dual_source_ratio or 0.0, 0.0) * 12.0, 12.0)
+        source_component = 4.0 if source_count >= 2 else 0.0
+        conflict_penalty = 18.0 if conflict_count > 0 else 0.0
+        filled_penalty = 22.0 if filled else 0.0
+        staleness_penalty = 0.0
+        if expected_interval_ms > 0 and observed_interval_ms > expected_interval_ms:
+            interval_excess = observed_interval_ms / expected_interval_ms
+            staleness_penalty = min((interval_excess - 1.0) * 4.0, 10.0)
+
+        return max(
+            0.0,
+            min(100.0, base + dual_component + source_component - conflict_penalty - filled_penalty - staleness_penalty),
+        )
 
 
 def load_state_artifact(
