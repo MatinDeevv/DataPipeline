@@ -6,6 +6,7 @@ import datetime as dt
 from pathlib import Path
 
 import polars as pl
+import pytest
 
 from mt5pipe.catalog.sqlite import CatalogDB
 from mt5pipe.compiler.manifest import build_stage_artifact_id, build_stage_manifest_id, compute_content_hash, write_manifest_sidecar
@@ -310,20 +311,30 @@ def _write_spec(
     )
 
 
-def _seed_project_data(storage_root: Path) -> StoragePaths:
+def _seed_project_data(
+    storage_root: Path,
+    *,
+    start_date: dt.date = dt.date(2026, 4, 1),
+    days: int = 2,
+) -> StoragePaths:
     paths = StoragePaths(storage_root)
     store = ParquetStore(compression="snappy", row_group_size=1000)
 
-    m1_df = _make_bars(dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC), 2000, "M1", 1)
+    start_dt = dt.datetime.combine(start_date, dt.time(0, 0), tzinfo=UTC)
+
+    def _rows(step_minutes: int) -> int:
+        return max(1, (days * 24 * 60) // step_minutes)
+
+    m1_df = _make_bars(start_dt, _rows(1), "M1", 1)
     _write_bars_by_date(m1_df, paths, store, "M1")
-    _write_bars_by_date(_make_bars(dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC), 500, "M5", 5), paths, store, "M5")
-    _write_bars_by_date(_make_bars(dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC), 200, "M15", 15), paths, store, "M15")
-    _write_bars_by_date(_make_bars(dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC), 48, "H1", 60), paths, store, "H1")
-    _write_bars_by_date(_make_bars(dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC), 12, "H4", 240), paths, store, "H4")
-    _write_bars_by_date(_make_bars(dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC), 2, "D1", 24 * 60), paths, store, "D1")
+    _write_bars_by_date(_make_bars(start_dt, _rows(5), "M5", 5), paths, store, "M5")
+    _write_bars_by_date(_make_bars(start_dt, _rows(15), "M15", 15), paths, store, "M15")
+    _write_bars_by_date(_make_bars(start_dt, _rows(60), "H1", 60), paths, store, "H1")
+    _write_bars_by_date(_make_bars(start_dt, _rows(240), "H4", 240), paths, store, "H4")
+    _write_bars_by_date(_make_bars(start_dt, max(days, 1), "D1", 24 * 60), paths, store, "D1")
     _write_state_fixture_partitions(m1_df, paths, store)
-    _write_merge_qa(dt.date(2026, 4, 1), paths, store)
-    _write_merge_qa(dt.date(2026, 4, 2), paths, store)
+    for offset in range(days):
+        _write_merge_qa(start_date + dt.timedelta(days=offset), paths, store)
     return paths
 
 
@@ -581,6 +592,97 @@ def test_compile_dataset_spec_builds_real_artifact_and_supports_inspect_diff(tmp
     assert diff.diff["label_pack_changed"] is False
 
 
+def test_compile_phase4_nonhuman_dataset_from_stable_selectors_over_wider_fixture(tmp_path, monkeypatch) -> None:
+    project_root = tmp_path / "project_phase4"
+    storage_root = project_root / "local_data" / "pipeline_data"
+    storage_root.mkdir(parents=True, exist_ok=True)
+    paths = _seed_project_data(
+        storage_root,
+        start_date=dt.date(2026, 4, 1),
+        days=5,
+    )
+    _write_project_config(project_root, storage_root)
+
+    nonhuman_spec = project_root / "config" / "datasets" / "xau_m1_nonhuman_v1.yaml"
+    core_spec = project_root / "config" / "datasets" / "xau_m1_core_v1.yaml"
+    nonhuman_selectors = [
+        "time/*",
+        "session/*",
+        "quality/*",
+        "htf_context/*",
+        "disagreement/*",
+        "event_shape/*",
+        "entropy/*",
+        "multiscale/*",
+    ]
+    _write_spec(
+        nonhuman_spec,
+        dataset_name="xau_m1_nonhuman",
+        version="1.0.0",
+        selectors=nonhuman_selectors,
+        date_from="2026-04-01",
+        date_to="2026-04-05",
+    )
+    _write_spec(
+        core_spec,
+        dataset_name="xau_m1_core",
+        version="1.0.0",
+        selectors=["time/*", "session/*", "quality/*", "htf_context/*"],
+        date_from="2026-04-01",
+        date_to="2026-04-05",
+    )
+
+    monkeypatch.chdir(project_root)
+
+    core_result = compile_dataset_spec(core_spec)
+    result = compile_dataset_spec(nonhuman_spec)
+
+    assert result.manifest.status == "published"
+    assert result.trust_report.accepted_for_publication is True
+    assert result.split_row_counts["train"] > 0
+    assert result.split_row_counts["val"] > 0
+    assert result.split_row_counts["test"] > 0
+    assert result.trust_report.decision_summary.startswith("accepted for publication")
+    assert result.trust_report.check_status_counts["failed"] == 0
+
+    inspected = inspect_artifact("dataset://xau_m1_nonhuman@1.0.0")
+    assert inspected.artifact.artifact_id == result.artifact_id
+    assert inspected.requested_feature_selectors == nonhuman_selectors
+    assert inspected.feature_artifact_refs == []
+    assert inspected.source_modes["state"] == "materialized"
+    assert inspected.source_modes["features"] == "materialized"
+    assert inspected.source_modes["label"] == "materialized"
+    assert set(inspected.feature_families) == {
+        "time",
+        "session",
+        "quality",
+        "htf_context",
+        "disagreement",
+        "event_shape",
+        "entropy",
+        "multiscale",
+    }
+    assert inspected.trust_check_status_counts["failed"] == 0
+
+    diff = diff_artifacts(core_result.artifact_id, result.artifact_id)
+    assert "multiscale.consistency@1.0.0" in diff.diff["feature_spec_refs_added"]
+    assert diff.diff["trust_decision_right"].startswith("accepted for publication")
+    assert diff.diff["trust_check_status_counts_right"]["failed"] == 0
+
+    catalog = CatalogDB(paths.catalog_db_path())
+    try:
+        artifact = catalog.get_artifact(result.artifact_id)
+        assert artifact is not None
+        assert artifact.status == "published"
+
+        trust_report = catalog.get_trust_report(result.artifact_id)
+        assert trust_report is not None
+        assert trust_report.status == "accepted"
+        assert trust_report.check_status_counts["failed"] == 0
+    finally:
+        catalog.close()
+
+
 def test_compile_phase3_nonhuman_dataset_from_state_and_feature_artifacts(tmp_path, monkeypatch) -> None:
     project_root = tmp_path / "project_phase3"
     storage_root = project_root / "local_data" / "pipeline_data"
@@ -802,3 +904,33 @@ def test_compile_phase3_rejects_when_artifact_backed_family_is_incomplete(tmp_pa
     assert result.trust_report.accepted_for_publication is False
     assert "missing_required_feature_columns" in result.trust_report.hard_failures
     assert any(status == "rejected" for status in result.status_history)
+
+
+def test_compile_dataset_spec_reports_unresolved_feature_artifact_refs_clearly(tmp_path, monkeypatch) -> None:
+    project_root = tmp_path / "project_missing_feature_ref"
+    storage_root = project_root / "local_data" / "pipeline_data"
+    storage_root.mkdir(parents=True, exist_ok=True)
+    _seed_project_data(storage_root)
+    _write_project_config(project_root, storage_root)
+
+    spec_path = project_root / "config" / "datasets" / "xau_m1_nonhuman_missing_ref.yaml"
+    _write_spec(
+        spec_path,
+        dataset_name="xau_m1_nonhuman",
+        version="1.0.0",
+        selectors=[
+            "time/*",
+            "session/*",
+            "quality/*",
+            "htf_context/*",
+            "disagreement/*",
+        ],
+        date_from="2026-04-01",
+        date_to="2026-04-02",
+        feature_artifact_refs=["feature.disagreement.state_disagreement.latest"],
+    )
+
+    monkeypatch.chdir(project_root)
+
+    with pytest.raises(KeyError, match="remove the stale feature_artifact_refs entry"):
+        compile_dataset_spec(spec_path)

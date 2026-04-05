@@ -27,6 +27,9 @@ UTC = dt.timezone.utc
 
 def _bars(start: dt.datetime, rows: int) -> pl.DataFrame:
     times = [start + dt.timedelta(minutes=i) for i in range(rows)]
+    source_pattern = [2, 2, 2, 1, 2, 2]
+    conflict_pattern = [0, 0, 1, 0, 0, 0]
+    dual_ratio_pattern = [0.8, 0.8, 0.8, 0.0, 0.8, 0.8]
     return pl.DataFrame(
         {
             "symbol": ["XAUUSD"] * rows,
@@ -40,9 +43,9 @@ def _bars(start: dt.datetime, rows: int) -> pl.DataFrame:
             "spread_mean": [0.2] * rows,
             "bid_close": [3000.1 + i for i in range(rows)],
             "ask_close": [3000.3 + i for i in range(rows)],
-            "source_count": [2, 2, 2, 1, 2, 2][:rows],
-            "conflict_count": [0, 0, 1, 0, 0, 0][:rows],
-            "dual_source_ratio": [0.8, 0.8, 0.8, 0.0, 0.8, 0.8][:rows],
+            "source_count": [source_pattern[i % len(source_pattern)] for i in range(rows)],
+            "conflict_count": [conflict_pattern[i % len(conflict_pattern)] for i in range(rows)],
+            "dual_source_ratio": [dual_ratio_pattern[i % len(dual_ratio_pattern)] for i in range(rows)],
         }
     )
 
@@ -174,6 +177,126 @@ def test_state_manifest_contains_coverage_and_source_quality_metadata(paths, sto
     assert manifest.clock == "M1"
     assert manifest.symbol == "XAUUSD"
     assert manifest.time_range_start_utc == result.coverage_summary.time_range_start_utc
+
+
+def test_state_window_materialization_respects_requested_anchor_range_with_prior_warmup(paths, store) -> None:
+    service = StateService(paths, store)
+    start = dt.datetime(2026, 4, 1, 23, 56, tzinfo=UTC)
+    bars = _bars(start, 10)
+    for day in sorted({ts.date() for ts in bars["time_utc"].to_list()}):
+        day_df = bars.filter(pl.col("time_utc").dt.date() == day)
+        store.write(day_df, paths.built_bars_file("XAUUSD", "M1", day))
+
+    state_result = service.materialize_state(
+        symbol="XAUUSD",
+        clock="M1",
+        state_version_ref="state.default@1.0.0",
+        date_from=dt.date(2026, 4, 1),
+        date_to=dt.date(2026, 4, 2),
+        build_id="state.test.cross_day",
+        dataset_spec_ref="dataset.test@1.0.0",
+        code_version="workspace-local-no-git",
+        merge_config_ref="merge.default@test",
+    )
+
+    windows = materialize_state_windows(
+        paths,
+        store,
+        state_result.ref,
+        request=StateWindowRequest(
+            symbol="XAUUSD",
+            clock="M1",
+            state_version="state.default@1.0.0",
+            date_from=dt.date(2026, 4, 2),
+            date_to=dt.date(2026, 4, 2),
+            window_sizes=["5m"],
+            include_partial_windows=False,
+        ),
+    )
+
+    window_result = windows["5m"]
+    anchors = window_result.window_df["anchor_ts_utc"].to_list()
+    assert anchors[0] == dt.datetime(2026, 4, 2, 0, 0, tzinfo=UTC)
+    assert all(anchor.date() == dt.date(2026, 4, 2) for anchor in anchors)
+    assert window_result.window_df.height == 6
+    assert window_result.window_df.row(0, named=True)["warmup_satisfied"] is True
+    assert len(window_result.manifest.input_partition_refs) == 2
+
+
+def test_state_window_materialization_is_deterministic_for_repeated_requests(paths, store) -> None:
+    service = StateService(paths, store)
+    start = dt.datetime(2026, 4, 1, 23, 56, tzinfo=UTC)
+    bars = _bars(start, 10)
+    for day in sorted({ts.date() for ts in bars["time_utc"].to_list()}):
+        day_df = bars.filter(pl.col("time_utc").dt.date() == day)
+        store.write(day_df, paths.built_bars_file("XAUUSD", "M1", day))
+
+    state_result = service.materialize_state(
+        symbol="XAUUSD",
+        clock="M1",
+        state_version_ref="state.default@1.0.0",
+        date_from=dt.date(2026, 4, 1),
+        date_to=dt.date(2026, 4, 2),
+        build_id="state.test.deterministic",
+        dataset_spec_ref="dataset.test@1.0.0",
+        code_version="workspace-local-no-git",
+        merge_config_ref="merge.default@test",
+    )
+    request = StateWindowRequest(
+        symbol="XAUUSD",
+        clock="M1",
+        state_version="state.default@1.0.0",
+        date_from=dt.date(2026, 4, 2),
+        date_to=dt.date(2026, 4, 2),
+        window_sizes=["5m"],
+        include_partial_windows=False,
+    )
+
+    first = materialize_state_windows(paths, store, state_result.ref, request=request)["5m"]
+    second = materialize_state_windows(paths, store, state_result.ref, request=request)["5m"]
+
+    assert first.ref.artifact_id == second.ref.artifact_id
+    assert first.manifest.content_hash == second.manifest.content_hash
+    assert first.window_df.equals(second.window_df)
+
+
+def test_state_window_materialization_rejects_request_outside_source_range(paths, store) -> None:
+    service = StateService(paths, store)
+    start = dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC)
+    bars = _bars(start, 6)
+    store.write(bars, paths.built_bars_file("XAUUSD", "M1", start.date()))
+
+    state_result = service.materialize_state(
+        symbol="XAUUSD",
+        clock="M1",
+        state_version_ref="state.default@1.0.0",
+        date_from=start.date(),
+        date_to=start.date(),
+        build_id="state.test.range_guard",
+        dataset_spec_ref="dataset.test@1.0.0",
+        code_version="workspace-local-no-git",
+        merge_config_ref="merge.default@test",
+    )
+
+    try:
+        materialize_state_windows(
+            paths,
+            store,
+            state_result.ref,
+            request=StateWindowRequest(
+                symbol="XAUUSD",
+                clock="M1",
+                state_version="state.default@1.0.0",
+                date_from=dt.date(2026, 4, 1),
+                date_to=dt.date(2026, 4, 2),
+                window_sizes=["5m"],
+                include_partial_windows=False,
+            ),
+        )
+    except ValueError as exc:
+        assert "must lie within the source StateArtifactRef range" in str(exc)
+    else:
+        raise AssertionError("Expected a ValueError when the request range exceeds the source state range")
 
 
 def test_state_public_boundary_exports_are_available() -> None:

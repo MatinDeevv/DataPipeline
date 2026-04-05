@@ -209,6 +209,13 @@ class StateService:
                 raise ValueError("TickArtifactRef requires request.anchor_on='canonical_tick'")
             if request.symbol != source_ref.symbol:
                 raise ValueError("StateWindowRequest.symbol must match the TickArtifactRef symbol")
+            self._validate_request_date_range(
+                request.date_from,
+                request.date_to,
+                source_ref.date_from,
+                source_ref.date_to,
+                source_name="TickArtifactRef",
+            )
             canonical_df = self.load_tick_artifact(source_ref)
             if canonical_df.is_empty():
                 raise FileNotFoundError(f"No canonical ticks found for {source_ref}")
@@ -220,12 +227,23 @@ class StateService:
             )
             source_artifact_id = source_ref.artifact_id
             clock = "tick"
-            input_partition_refs = self._collect_tick_input_partition_refs(request.symbol, request.date_from, request.date_to)
+            input_partition_refs = self._collect_tick_input_partition_refs(
+                request.symbol,
+                source_ref.date_from,
+                source_ref.date_to,
+            )
         else:
             if request.anchor_on != "state":
                 raise ValueError("StateArtifactRef requires request.anchor_on='state'")
             if request.symbol != source_ref.symbol or request.clock != source_ref.clock or request.state_version != source_ref.state_version:
                 raise ValueError("StateWindowRequest must match the source StateArtifactRef symbol/clock/state_version")
+            self._validate_request_date_range(
+                request.date_from,
+                request.date_to,
+                source_ref.date_from,
+                source_ref.date_to,
+                source_name="StateArtifactRef",
+            )
             state_df = self.load_state_artifact(source_ref)
             if state_df.is_empty():
                 raise FileNotFoundError(f"No state snapshots found for {source_ref}")
@@ -235,8 +253,8 @@ class StateService:
                 request.symbol,
                 source_ref.clock,
                 request.state_version,
-                request.date_from,
-                request.date_to,
+                source_ref.date_from,
+                source_ref.date_to,
             )
 
         results: dict[str, StateWindowMaterializationResult] = {}
@@ -254,6 +272,7 @@ class StateService:
                 base_provenance_refs=base_provenance,
                 include_partial_windows=request.include_partial_windows,
             )
+            window_df = self._filter_window_anchors_by_date(window_df, request.date_from, request.date_to)
             logical_name = f"{request.symbol}.{clock}.{window_size}"
             coverage_summary = build_state_coverage_summary(window_df, clock=clock)
             source_quality_summary = build_state_source_quality_summary(window_df)
@@ -668,6 +687,30 @@ class StateService:
                 day_df,
                 self._paths.state_window_file(symbol, clock, date_val, state_version, window_size),
             )
+
+    @staticmethod
+    def _validate_request_date_range(
+        request_date_from: dt.date,
+        request_date_to: dt.date,
+        source_date_from: dt.date,
+        source_date_to: dt.date,
+        *,
+        source_name: str,
+    ) -> None:
+        if request_date_from < source_date_from or request_date_to > source_date_to:
+            raise ValueError(
+                f"StateWindowRequest date range {request_date_from.isoformat()}..{request_date_to.isoformat()} "
+                f"must lie within the source {source_name} range "
+                f"{source_date_from.isoformat()}..{source_date_to.isoformat()}"
+            )
+
+    @staticmethod
+    def _filter_window_anchors_by_date(window_df: pl.DataFrame, date_from: dt.date, date_to: dt.date) -> pl.DataFrame:
+        if window_df.is_empty():
+            return window_df
+        return window_df.filter(
+            pl.col("anchor_ts_utc").dt.date().is_between(date_from, date_to, closed="both")
+        ).sort("anchor_ts_utc")
 
     @staticmethod
     def _resolve_spread(row: dict[str, object]) -> float:

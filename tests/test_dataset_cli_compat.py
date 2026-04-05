@@ -36,6 +36,22 @@ def _make_trust_report(*, status: str = "accepted", score: float = 97.25) -> Sim
         label_quality_score=96.0,
         source_quality_score=95.0,
         lineage_score=94.0,
+        decision_summary=(
+            f"{status} for publication; total={score:.2f}"
+            if status != "accepted"
+            else f"accepted for publication; total={score:.2f}"
+        ),
+        warning_reasons=[],
+        rejection_reasons=[],
+        check_status_counts={"passed": 8, "warning": 0, "failed": 0},
+        metrics={
+            "dataset_quality": {
+                "quality_score": score,
+                "total_nulls": 0,
+                "null_columns": {},
+                "constant_columns": [],
+            }
+        },
         hard_failures=[],
         warnings=[],
     )
@@ -52,9 +68,11 @@ def _make_inspection(
     split_rows: dict[str, int] | None = None,
     dataset_spec_ref: str = "xau_m1_core@1.0.0",
     label_pack_ref: str = "core_tb_volscaled@1.0.0",
+    trust_report: SimpleNamespace | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         artifact_id=artifact_id,
+        manifest_path=Path(f"local_data/pipeline_data/manifests/kind=dataset/name={logical_name}/manifest.json"),
         manifest=SimpleNamespace(
             artifact_id=artifact_id,
             logical_name=logical_name,
@@ -95,7 +113,7 @@ def _make_inspection(
                 ],
             },
         ),
-        trust_report=_make_trust_report(status="accepted", score=97.25),
+        trust_report=trust_report or _make_trust_report(status="accepted", score=97.25),
     )
 
 
@@ -132,6 +150,10 @@ def test_compile_dataset_cli_success(monkeypatch) -> None:
     assert "manifest.json" in result.stdout
     assert "trust_status: accepted" in result.stdout
     assert "trust_score_total: 98.50" in result.stdout
+    assert "trust_decision: accepted for publication; total=98.50" in result.stdout
+    assert 'trust_check_counts: {"failed": 0, "passed": 8, "warning": 0}' in result.stdout
+    assert "trust_warning_reasons: []" in result.stdout
+    assert "trust_rejection_reasons: []" in result.stdout
     assert "published_ref: dataset://xau_m1_core@1.0.0" in result.stdout
 
 
@@ -150,11 +172,17 @@ def test_inspect_dataset_cli_resolution_path(monkeypatch, tmp_path: Path) -> Non
         result = runner.invoke(app, ["dataset", "inspect-dataset", "--artifact", ref])
         assert result.exit_code == 0
         assert "artifact_id: dataset.inspect.001" in result.stdout
+        assert "manifest_path:" in result.stdout
         assert "time_range: 2026-04-01 00:00:00+00:00 -> 2026-04-02 23:59:00+00:00" in result.stdout
         assert 'feature_families: ["htf_context", "quality", "session", "time"]' in result.stdout
         assert "label_pack: core_tb_volscaled@1.0.0" in result.stdout
         assert "schema_columns_count: 12" in result.stdout
         assert "trust_score_total: 97.25" in result.stdout
+        assert "trust_decision: accepted for publication; total=97.25" in result.stdout
+        assert 'trust_check_counts: {"failed": 0, "passed": 8, "warning": 0}' in result.stdout
+        assert "trust_warning_reasons: []" in result.stdout
+        assert "trust_rejection_reasons: []" in result.stdout
+        assert 'dataset_quality_alerts: {"constant_columns_sample": [], "null_columns_sample": {}, "quality_score": 97.25, "total_nulls": 0}' in result.stdout
         assert '"state_artifacts": ["state.xauusd.m1.20260401"]' in result.stdout
 
     assert refs_seen == ["dataset.inspect.001", "dataset://xau_m1_core@1.0.0", str(manifest_path)]
@@ -172,6 +200,16 @@ def test_diff_dataset_cli_resolution_path(monkeypatch, tmp_path: Path) -> None:
         split_rows={"train": 700, "val": 150, "test": 150},
         dataset_spec_ref="xau_m1_core@1.0.0",
     )
+    right_trust_report = _make_trust_report(status="accepted", score=97.25)
+    right_trust_report = SimpleNamespace(
+        **{
+            **right_trust_report.__dict__,
+            "decision_summary": "accepted for publication with warnings; total=97.25, warnings=1",
+            "warning_reasons": ["source_quality: score 72.00 is below preferred 75.00"],
+            "check_status_counts": {"passed": 7, "warning": 1, "failed": 0},
+        }
+    )
+
     right = _make_inspection(
         artifact_id="dataset.right.002",
         logical_version="1.0.1",
@@ -179,6 +217,7 @@ def test_diff_dataset_cli_resolution_path(monkeypatch, tmp_path: Path) -> None:
         feature_refs=["time.cyclical_time@1.0.0", "htf_context.standard_context@1.0.0"],
         split_rows={"train": 720, "val": 140, "test": 140},
         dataset_spec_ref="xau_m1_core@1.0.1",
+        trust_report=right_trust_report,
     )
 
     def fake_diff(left_ref: str, right_ref: str):
@@ -210,6 +249,11 @@ def test_diff_dataset_cli_resolution_path(monkeypatch, tmp_path: Path) -> None:
     assert 'schema_columns_removed: ["relative_spread"]' in result.stdout
     assert "trust_status_left: accepted" in result.stdout
     assert "trust_status_right: accepted" in result.stdout
+    assert "trust_decision_left: accepted for publication; total=97.25" in result.stdout
+    assert "trust_decision_right: accepted for publication with warnings; total=97.25, warnings=1" in result.stdout
+    assert 'trust_check_counts_left: {"failed": 0, "passed": 8, "warning": 0}' in result.stdout
+    assert 'trust_check_counts_right: {"failed": 0, "passed": 7, "warning": 1}' in result.stdout
+    assert 'trust_warning_reasons_added: ["source_quality: score 72.00 is below preferred 75.00"]' in result.stdout
 
 
 def test_legacy_dataset_build_compatibility_facade(monkeypatch, paths, store) -> None:
@@ -304,10 +348,7 @@ def test_phase3_example_spec_loading() -> None:
         "disagreement/*",
         "event_shape/*",
         "entropy/*",
+        "multiscale/*",
     ]
-    assert spec.feature_artifact_refs == [
-        "feature.disagreement.state_disagreement.latest",
-        "feature.event_shape.event_shape.latest",
-        "feature.entropy.micro_entropy.latest",
-    ]
+    assert spec.feature_artifact_refs == []
     assert spec.label_pack_ref == "core_tb_volscaled@1.0.0"

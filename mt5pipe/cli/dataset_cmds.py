@@ -214,17 +214,59 @@ def _trust_breakdown(result: Any) -> dict[str, Any]:
     }
 
 
+def _trust_decision_summary(result: Any) -> str:
+    return str(_first_present(result, "trust_report.decision_summary", "trust_decision_summary", default="-"))
+
+
+def _trust_warning_reasons(result: Any) -> list[str]:
+    reasons = _first_present(result, "trust_report.warning_reasons", "trust_warning_reasons", default=[])
+    return [str(reason) for reason in _as_list(reasons)]
+
+
+def _trust_rejection_reasons(result: Any) -> list[str]:
+    reasons = _first_present(result, "trust_report.rejection_reasons", "trust_rejection_reasons", default=[])
+    return [str(reason) for reason in _as_list(reasons)]
+
+
+def _trust_check_counts(result: Any) -> dict[str, Any]:
+    counts = _first_present(result, "trust_report.check_status_counts", "trust_check_status_counts", default={})
+    return {str(key): value for key, value in _as_dict(counts).items()}
+
+
+def _dataset_quality_alerts(result: Any) -> dict[str, Any]:
+    metrics = _as_dict(_first_present(result, "trust_report.metrics.dataset_quality", default={}))
+    null_columns = {
+        str(key): value
+        for key, value in sorted(_as_dict(metrics.get("null_columns", {})).items())
+    }
+    constant_columns = sorted(str(value) for value in _as_list(metrics.get("constant_columns", [])))
+    if not metrics and not null_columns and not constant_columns:
+        return {}
+    return {
+        "quality_score": metrics.get("quality_score"),
+        "total_nulls": metrics.get("total_nulls"),
+        "null_columns_sample": dict(list(null_columns.items())[:5]),
+        "constant_columns_sample": constant_columns[:5],
+    }
+
+
 def _compile_failure_reason(result: Any) -> str | None:
+    rejection_reasons = _trust_rejection_reasons(result)
+    if rejection_reasons:
+        return "; ".join(rejection_reasons)
+    decision_summary = _trust_decision_summary(result)
+    if _artifact_status(result) in {"rejected", "failed"} and decision_summary not in {"", "-"}:
+        return decision_summary
     trust = _trust_report(result)
     hard_failures = [str(item) for item in _as_list(_first_present(trust, "hard_failures", default=[]))]
     if hard_failures:
         return "; ".join(hard_failures)
-    warnings = [str(item) for item in _as_list(_first_present(trust, "warnings", default=[]))]
+    warning_reasons = _trust_warning_reasons(result)
     if _artifact_status(result) in {"rejected", "failed"}:
-        return "; ".join(warnings) if warnings else f"artifact status is {_artifact_status(result)}"
+        return "; ".join(warning_reasons) if warning_reasons else f"artifact status is {_artifact_status(result)}"
     accepted = _first_present(trust, "accepted_for_publication", default=True)
     if accepted is False:
-        return "; ".join(warnings) if warnings else "artifact was not accepted for publication"
+        return "; ".join(warning_reasons) if warning_reasons else "artifact was not accepted for publication"
     return None
 
 
@@ -240,6 +282,10 @@ def _compile_result_lines(result: Any) -> list[str]:
         f"split_rows: {_json(_split_rows(result))}",
         f"trust_status: {_trust_status(result)}",
         f"trust_score_total: {_format_float(_trust_score(result))}",
+        f"trust_decision: {_trust_decision_summary(result)}",
+        f"trust_check_counts: {_json(_trust_check_counts(result))}",
+        f"trust_warning_reasons: {_json(_trust_warning_reasons(result))}",
+        f"trust_rejection_reasons: {_json(_trust_rejection_reasons(result))}",
         f"published_ref: {published_ref or '-'}",
     ]
 
@@ -251,6 +297,7 @@ def _inspect_result_lines(result: Any) -> list[str]:
         f"artifact_id: {_artifact_id(result)}",
         f"logical: {_logical_name(result)}@{_logical_version(result)}",
         f"status: {_artifact_status(result)}",
+        f"manifest_path: {_manifest_path(result)}",
         f"dataset_spec_ref: {_dataset_spec_ref(result)}",
         f"time_range: {time_start} -> {time_end}",
         f"split_rows: {_json(_split_rows(result))}",
@@ -264,7 +311,12 @@ def _inspect_result_lines(result: Any) -> list[str]:
         f"label_pack: {_label_pack_ref(result)}",
         f"trust_status: {_trust_status(result)}",
         f"trust_score_total: {_format_float(_trust_score(result))}",
+        f"trust_decision: {_trust_decision_summary(result)}",
+        f"trust_check_counts: {_json(_trust_check_counts(result))}",
+        f"trust_warning_reasons: {_json(_trust_warning_reasons(result))}",
+        f"trust_rejection_reasons: {_json(_trust_rejection_reasons(result))}",
         f"trust_breakdown: {_json(_trust_breakdown(result))}",
+        f"dataset_quality_alerts: {_json(_dataset_quality_alerts(result))}",
         f"lineage_refs: {_json(_lineage_refs(result))}",
     ]
 
@@ -322,8 +374,16 @@ def _diff_result_lines(result: Any) -> list[str]:
         f"trust_status_right: {_trust_status(right)}",
         f"trust_score_left: {_format_float(_trust_score(left))}",
         f"trust_score_right: {_format_float(_trust_score(right))}",
+        f"trust_decision_left: {_trust_decision_summary(left)}",
+        f"trust_decision_right: {_trust_decision_summary(right)}",
+        f"trust_check_counts_left: {_json(_trust_check_counts(left))}",
+        f"trust_check_counts_right: {_json(_trust_check_counts(right))}",
         f"trust_breakdown_left: {_json(_trust_breakdown(left))}",
         f"trust_breakdown_right: {_json(_trust_breakdown(right))}",
+        f"trust_warning_reasons_added: {_json(sorted(set(_trust_warning_reasons(right)) - set(_trust_warning_reasons(left))))}",
+        f"trust_warning_reasons_removed: {_json(sorted(set(_trust_warning_reasons(left)) - set(_trust_warning_reasons(right))))}",
+        f"trust_rejection_reasons_added: {_json(sorted(set(_trust_rejection_reasons(right)) - set(_trust_rejection_reasons(left))))}",
+        f"trust_rejection_reasons_removed: {_json(sorted(set(_trust_rejection_reasons(left)) - set(_trust_rejection_reasons(right))))}",
         f"lineage_refs_left: {_json(_lineage_refs(left))}",
         f"lineage_refs_right: {_json(_lineage_refs(right))}",
     ]

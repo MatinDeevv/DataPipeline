@@ -170,6 +170,7 @@ class LabelService:
 def _label_manifest_diagnostics(label_df: pl.DataFrame, label_pack: LabelPack) -> dict[str, Any]:
     """Build compact horizon-level diagnostics for manifest metadata."""
     horizon_summaries: dict[str, dict[str, Any]] = {}
+    max_horizon = max(label_pack.horizons_minutes)
 
     for horizon in label_pack.horizons_minutes:
         suffix = f"{horizon}m"
@@ -191,7 +192,10 @@ def _label_manifest_diagnostics(label_df: pl.DataFrame, label_pack: LabelPack) -
 
     return {
         "base_clock": label_pack.base_clock,
+        "horizons_minutes": label_pack.horizons_minutes,
+        "max_horizon_minutes": max_horizon,
         "purge_rows": label_pack.purge_rows,
+        "recommended_min_embargo_rows": label_pack.purge_rows,
         "exclusions": label_pack.exclusions,
         "horizon_summaries": horizon_summaries,
     }

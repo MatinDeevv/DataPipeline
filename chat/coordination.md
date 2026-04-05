@@ -109,3 +109,35 @@ summary: Phase 4 state artifacts now expose typed coverage/source-quality summar
 needs: Agent 2 can consume new window metadata from mt5pipe.state.public only. Agent 3 can read manifest.coverage_summary/source_quality_summary and manifest time-range fields without deriving them downstream.
 files: mt5pipe/state/models.py, mt5pipe/state/public.py, mt5pipe/state/service.py, mt5pipe/state/internal/bar_support.py, mt5pipe/state/internal/quality.py, mt5pipe/state/internal/windows.py, tests/test_state_windows.py, tests/test_state_boundaries.py
 ```
+
+### [2026-04-04 22:44] Agent 3 - Phase 4 checkpoint note
+
+```
+agent: agent_3
+type: handoff
+area: compiler
+summary: Stable selector-only Phase 4 checkpoint path is now locked in. config/datasets/xau_m1_nonhuman_v1.yaml compiles/publishes through state_version_ref + feature_selectors only, over 2024-02-26..2024-03-01, with multiscale/* included. Compiler/truth/catalog/CLI focused tests are green and inspect/diff now surface trust decision/check-count/reason summaries directly.
+needs: Checkpoint is yellow rather than fully green because the live accepted artifact still reports source_quality=62.87 (< preferred 75.00), nulls in HTF/event-related columns, and several slice-specific constant columns. Agent 1 can improve the checkpoint most by raising state/source-quality on this synchronized range; Agent 2 can review whether the remaining constant/null machine-native columns are expected for the slice or should be tightened in the next phase.
+files: config/datasets/xau_m1_nonhuman_v1.yaml, config/datasets/xau_m1_core_v1.yaml, mt5pipe/truth/service.py, mt5pipe/cli/dataset_cmds.py, tests/test_compiler.py, tests/test_truth_core.py, tests/test_dataset_cli_compat.py
+```
+
+### [2026-04-04 22:31] Agent 2 - checkpoint selector confirmation
+
+```
+agent: agent_2
+type: handoff
+area: features
+summary: Added a checkpoint compile test through mt5pipe.compiler.public that publishes successfully with selectors time/session/quality/htf_context/disagreement/event_shape/entropy/multiscale on seeded XAUUSD M1 data. Label diagnostics now surface horizon span and recommended embargo floor explicitly.
+needs: Agent 3 can treat disagreement/*, event_shape/*, entropy/*, and multiscale/* as stable on the registry-materialized path. For the current config/datasets/xau_m1_nonhuman_v1 artifact-ref path, multiscale/* is not required; keep it excluded unless you intentionally switch the spec to registry materialization.
+files: tests/test_features_phase4_checkpoint.py, mt5pipe/labels/service.py, tests/test_features_phase4.py
+```
+### [2026-04-04 22:30] Agent 1 - Phase 4 continuation state-window range fix
+
+```
+agent: agent_1
+type: handoff
+area: state
+summary: Audited the nonhuman dataset path and fixed the remaining state-side reliability issue in rolling windows. State windows now preserve prior-source warmup context but only emit anchors within the requested date range, and they reject requests that fall outside the source artifact range.
+needs: Agent 2 can assume requested window artifacts no longer leak anchors from earlier source dates. Agent 3 can assume window lineage/input refs cover the full source range actually used for warmup.
+files: mt5pipe/state/service.py, tests/test_state_windows.py
+```

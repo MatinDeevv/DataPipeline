@@ -29,7 +29,7 @@ The top-level package is `mt5pipe/`. In architecture discussions, "pipeline" map
 - **Responsibility:** Feature builders, feature registry, label generation, label registry
 - **Public surface:** registry helpers, artifact ref/load helpers, and stable family builders are re-exported from `mt5pipe.features.public` and `mt5pipe.labels.public`
 - **Stable machine-native families:** `disagreement/*`, `event_shape/*`, `entropy/*`, `multiscale/*`
-- **Label artifact note:** label manifests include compact horizon/class-balance diagnostics; insufficient forward-horizon triple-barrier rows are explicitly null
+- **Label artifact note:** label manifests include compact horizon/class-balance diagnostics plus explicit horizon span and recommended embargo floor; insufficient forward-horizon triple-barrier rows are explicitly null
 
 ### Agent 3 — Compiler
 - **Owns:** `mt5pipe/compiler/`, `mt5pipe/truth/`, `mt5pipe/catalog/`
@@ -37,6 +37,7 @@ The top-level package is `mt5pipe/`. In architecture discussions, "pipeline" map
 - **Tests:** `tests/test_compiler.py`, `tests/test_truth_core.py`, `tests/test_catalog.py`
 - **Responsibility:** Dataset compilation, truth gate, artifact catalog, CLI integration
 - **Public surface:** `DatasetSpec` supports version refs plus explicit artifact refs, and `mt5pipe.compiler.public` re-exports compile/inspect/diff helpers for deterministic dataset artifact workflows
+- **Truth/CLI note:** Trust reports now carry `score_breakdown`, `decision_summary`, `warning_reasons`, `rejection_reasons`, and `check_status_counts`; `compile-dataset`, `inspect-dataset`, and `diff-dataset` surface those fields directly for research use
 
 ---
 

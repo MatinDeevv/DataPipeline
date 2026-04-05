@@ -1,11 +1,11 @@
 schema_version: "1.0.0"
 dataset_name: "xau_m1_core"
 version: "1.0.0"
-description: "Compiler-backed XAUUSD M1 core dataset with stable core features and labels"
+description: "Compiler-backed XAUUSD M1 core dataset over a wider synchronized range with stable core features and labels"
 symbols:
   - "XAUUSD"
-date_from: "2026-01-20"
-date_to: "2026-01-23"
+date_from: "2024-02-26"
+date_to: "2024-03-01"
 base_clock: "M1"
 state_version_ref: "state.default@1.0.0"
 feature_selectors:
@@ -24,6 +24,6 @@ embargo_rows: 240
 truth_policy_ref: "truth.default@1.0.0"
 publish_on_accept: true
 tags:
-  - "phase3-ready"
+  - "phase4-ready"
   - "xau"
   - "core"

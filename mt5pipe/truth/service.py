@@ -24,6 +24,7 @@ class TruthService:
     MIN_FEATURE_QUALITY_SCORE = 80.0
     MIN_LABEL_QUALITY_SCORE = 80.0
     MIN_SOURCE_QUALITY_SCORE = 60.0
+    PREFERRED_SOURCE_QUALITY_SCORE = 75.0
 
     FAMILY_MISSINGNESS_THRESHOLDS = {
         "time": 0.0,
@@ -33,6 +34,7 @@ class TruthService:
         "disagreement": 15.0,
         "event_shape": 15.0,
         "entropy": 20.0,
+        "multiscale": 10.0,
     }
 
     def evaluate_dataset(
@@ -53,6 +55,7 @@ class TruthService:
         manifest_path: Path | None = None,
     ) -> TrustReport:
         quality = dataset_quality_report(dataset_df)
+        dataset_quality_metrics = self._dataset_quality_metrics(dataset_df, quality)
         checks: list[QaCheckResult] = []
         hard_failures: list[str] = []
         warnings: list[str] = []
@@ -101,9 +104,9 @@ class TruthService:
             4,
         )
 
-        if quality.get("total_nulls", 0) > 0:
+        if dataset_quality_metrics["total_nulls"] > 0:
             warnings.append("dataset_contains_nulls")
-        if quality.get("constant_columns"):
+        if dataset_quality_metrics["constant_columns"]:
             warnings.append("dataset_contains_constant_columns")
 
         label_check = self._label_quality_check(dataset_df, label_pack)
@@ -187,7 +190,11 @@ class TruthService:
             lineage_score=lineage_score,
         )
         rejection_reasons = self._rejection_reasons(failed_checks, threshold_shortfalls)
-        warning_reasons = self._warning_reasons(warning_checks, warnings)
+        warning_reasons = self._warning_reasons(
+            warning_checks,
+            warnings,
+            dataset_quality_metrics=dataset_quality_metrics,
+        )
         check_status_counts = {
             "passed": sum(1 for check in checks if check.status == "passed"),
             "warning": len(warning_checks),
@@ -226,6 +233,7 @@ class TruthService:
                 "columns": len(dataset_df.columns),
                 "duplicate_primary_clock_rows": int(leakage_check.metrics.get("duplicate_primary_clock_rows", 0)),
                 "quality_score": float(quality.get("quality_score", 0.0)),
+                "dataset_quality": dataset_quality_metrics,
                 "build_row_stats": build_row_stats,
                 "split_rows": coverage_check.metrics.get("split_rows", {}),
                 "feature_family_missingness": family_missingness_check.metrics,
@@ -247,12 +255,22 @@ class TruthService:
     def _coverage_check(self, dataset_df: pl.DataFrame, split_frames: dict[str, pl.DataFrame]) -> QaCheckResult:
         dataset_empty = dataset_df.is_empty()
         empty_splits = [name for name, frame in split_frames.items() if frame.is_empty()]
+        unique_dates = (
+            sorted(dataset_df["time_utc"].dt.date().unique().cast(pl.Utf8).to_list())
+            if not dataset_df.is_empty() and "time_utc" in dataset_df.columns
+            else []
+        )
         failed = dataset_empty or bool(empty_splits)
         return QaCheckResult(
             check_name="coverage",
             status="failed" if failed else "passed",
             score=0.0 if failed else 100.0,
-            metrics={"rows": len(dataset_df), "split_rows": {k: len(v) for k, v in split_frames.items()}},
+            metrics={
+                "rows": len(dataset_df),
+                "split_rows": {k: len(v) for k, v in split_frames.items()},
+                "observed_dates": unique_dates,
+                "observed_date_count": len(unique_dates),
+            },
             thresholds={"min_rows": 1, "required_non_empty_splits": sorted(split_frames)},
             failure_reason=(
                 "dataset artifact has no rows"
@@ -460,6 +478,14 @@ class TruthService:
                 "present_columns": len(present_columns),
                 "all_null_columns": len(null_columns),
             }
+        horizons_with_missing_columns = sorted(
+            horizon for horizon, metrics in horizon_metrics.items()
+            if metrics["present_columns"] != metrics["expected_columns"]
+        )
+        horizons_with_all_null_columns = sorted(
+            horizon for horizon, metrics in horizon_metrics.items()
+            if metrics["all_null_columns"] > 0
+        )
 
         if missing_label_columns or all_null_label_columns:
             score = 0.0
@@ -481,12 +507,24 @@ class TruthService:
                 "missing_label_columns": missing_label_columns,
                 "all_null_label_columns": all_null_label_columns,
                 "horizon_metrics": horizon_metrics,
+                "horizons_with_missing_columns": horizons_with_missing_columns,
+                "horizons_with_all_null_columns": horizons_with_all_null_columns,
             },
             thresholds={"expected_label_columns": len(label_pack.output_columns), "label_nulls": 0},
             failure_reason=(
                 "not all label columns were materialized"
+                + (
+                    f"; affected horizons: {', '.join(horizons_with_missing_columns)}"
+                    if horizons_with_missing_columns
+                    else ""
+                )
                 if missing_label_columns
                 else "one or more label columns is entirely null"
+                + (
+                    f"; affected horizons: {', '.join(horizons_with_all_null_columns)}"
+                    if horizons_with_all_null_columns
+                    else ""
+                )
                 if all_null_label_columns
                 else ""
             ),
@@ -505,13 +543,16 @@ class TruthService:
         metrics = self._source_quality_metrics(symbol, date_from, date_to, paths, store, state_df)
         score = self._source_quality_score(metrics)
         failed = score < self.MIN_SOURCE_QUALITY_SCORE
-        warning = not failed and score < 75.0
+        warning = not failed and score < self.PREFERRED_SOURCE_QUALITY_SCORE
         return QaCheckResult(
             check_name="source_quality",
             status="failed" if failed else "warning" if warning else "passed",
             score=score,
             metrics=metrics,
-            thresholds={"min_source_quality_score": self.MIN_SOURCE_QUALITY_SCORE},
+            thresholds={
+                "min_source_quality_score": self.MIN_SOURCE_QUALITY_SCORE,
+                "preferred_source_quality_score": self.PREFERRED_SOURCE_QUALITY_SCORE,
+            },
             failure_reason="source/merge quality metrics are below publication threshold" if failed else "",
         )
 
@@ -638,6 +679,22 @@ class TruthService:
         return round(max(0.0, min(100.0, score)), 4)
 
     @staticmethod
+    def _dataset_quality_metrics(dataset_df: pl.DataFrame, quality: dict[str, object]) -> dict[str, object]:
+        null_columns = {
+            column: int(dataset_df[column].null_count())
+            for column in dataset_df.columns
+            if int(dataset_df[column].null_count()) > 0
+        }
+        constant_columns = sorted(str(column) for column in quality.get("constant_columns", []))
+        return {
+            "quality_score": float(quality.get("quality_score", 0.0)),
+            "total_nulls": int(quality.get("total_nulls", 0)),
+            "null_columns": null_columns,
+            "constant_columns": constant_columns,
+            "duplicate_timestamps": int(quality.get("duplicate_timestamps", 0)),
+        }
+
+    @staticmethod
     def _group_feature_specs_by_family(feature_specs: list[FeatureSpec]) -> dict[str, list[FeatureSpec]]:
         grouped: dict[str, list[FeatureSpec]] = {}
         for spec in feature_specs:
@@ -698,35 +755,95 @@ class TruthService:
         reasons.extend(threshold_shortfalls)
         return reasons
 
-    def _warning_reasons(self, warning_checks: list[QaCheckResult], warning_codes: list[str]) -> list[str]:
+    def _warning_reasons(
+        self,
+        warning_checks: list[QaCheckResult],
+        warning_codes: list[str],
+        *,
+        dataset_quality_metrics: dict[str, object],
+    ) -> list[str]:
         reasons = []
+        warning_check_names = {check.check_name for check in warning_checks}
         reasons.extend(
             f"{check.check_name}: {self._warning_detail_from_check(check)}"
             for check in warning_checks
         )
-        reasons.extend(self._warning_detail_from_code(code) for code in warning_codes)
+        reasons.extend(
+            self._warning_detail_from_code(
+                code,
+                dataset_quality_metrics=dataset_quality_metrics,
+                warning_check_names=warning_check_names,
+            )
+            for code in warning_codes
+        )
         return sorted({reason for reason in reasons if reason})
 
-    @staticmethod
-    def _warning_detail_from_check(check: QaCheckResult) -> str:
+    def _warning_detail_from_check(self, check: QaCheckResult) -> str:
         if check.failure_reason:
             return check.failure_reason
         if check.check_name == "feature_family_missingness":
             warning_families = check.metrics.get("warning_families", [])
             if warning_families:
                 return f"families approaching threshold: {', '.join(sorted(warning_families))}"
+        if check.check_name == "label_quality":
+            label_nulls = int(check.metrics.get("label_nulls", 0))
+            return f"label nulls remain after purge: {label_nulls}"
+        if check.check_name == "source_quality":
+            return (
+                f"score {check.score:.2f} is below preferred {self.PREFERRED_SOURCE_QUALITY_SCORE:.2f}; "
+                f"state_quality_mean={float(check.metrics.get('state_quality_mean', 0.0)):.2f}, "
+                f"state_filled_ratio={float(check.metrics.get('state_filled_ratio', 0.0)):.4f}, "
+                f"dual_source_ratio_mean={float(check.metrics.get('dual_source_ratio_mean', 0.0)):.4f}"
+            )
         return "warning threshold reached"
 
     @staticmethod
-    def _warning_detail_from_code(code: str) -> str:
+    def _warning_detail_from_code(
+        code: str,
+        *,
+        dataset_quality_metrics: dict[str, object],
+        warning_check_names: set[str],
+    ) -> str:
+        if code == "dataset_contains_nulls":
+            null_columns = dict(dataset_quality_metrics.get("null_columns", {}))
+            return f"dataset contains nulls in: {TruthService._format_column_metric_sample(null_columns)}"
+        if code == "dataset_contains_constant_columns":
+            constant_columns = [str(column) for column in dataset_quality_metrics.get("constant_columns", [])]
+            return f"constant columns detected: {TruthService._format_name_sample(constant_columns)}"
+        if code == "source_quality_warning" and "source_quality" in warning_check_names:
+            return ""
+        if code == "label_quality_warning" and "label_quality" in warning_check_names:
+            return ""
+        if code == "feature_family_missingness_warning" and "feature_family_missingness" in warning_check_names:
+            return ""
         messages = {
-            "dataset_contains_nulls": "dataset artifact contains null values",
-            "dataset_contains_constant_columns": "dataset artifact contains constant columns",
             "source_quality_warning": "source quality is acceptable but below preferred research comfort",
             "label_quality_warning": "label columns contain null values",
             "feature_family_missingness_warning": "one or more feature families is approaching its missingness threshold",
         }
         return messages.get(code, code)
+
+    @staticmethod
+    def _format_column_metric_sample(metrics: dict[str, int], *, limit: int = 5) -> str:
+        if not metrics:
+            return "-"
+        ordered_items = sorted(metrics.items())
+        visible = [f"{name}={value}" for name, value in ordered_items[:limit]]
+        remainder = len(ordered_items) - len(visible)
+        if remainder > 0:
+            visible.append(f"+{remainder} more")
+        return ", ".join(visible)
+
+    @staticmethod
+    def _format_name_sample(values: list[str], *, limit: int = 5) -> str:
+        if not values:
+            return "-"
+        ordered = sorted(values)
+        visible = ordered[:limit]
+        remainder = len(ordered) - len(visible)
+        if remainder > 0:
+            visible.append(f"+{remainder} more")
+        return ", ".join(visible)
 
     @staticmethod
     def _decision_summary(

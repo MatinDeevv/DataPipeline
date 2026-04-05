@@ -86,3 +86,38 @@ summary: Starting Phase 4 hardening on the nonhuman dataset path with focus on w
 needs: Will stay on public boundaries only and log any public-surface drift in contracts/docs/spec examples immediately.
 files: feedbacks/latest.md, chat/contracts.md, chat/coordination.md, chat/agent_3.md, mt5pipe/state/public.py, mt5pipe/features/public.py, mt5pipe/labels/public.py, mt5pipe/compiler/public.py
 ```
+
+### [2026-04-04 22:28:11 -04:00] agent_3 - phase4 continuation start
+
+feedback_read: yes
+feedback_source: feedbacks/latest.md
+feedback_summary: Phase 4 should stay disciplined: freeze architecture, harden the current nonhuman dataset path, and make trust/reporting more informative without weakening gates. Wider synchronized-range reliability is the checkpoint standard.
+phase: Phase 4 continuation
+area: compiler|truth|catalog|cli
+
+```
+agent: agent_3
+type: update
+area: compiler/truth/catalog/cli
+summary: Starting the Phase 4 checkpoint audit/finalization pass. I am re-validating xau_m1_nonhuman_v1 against only stable public selectors, then tightening compiler/truth/catalog/CLI behavior wherever the live artifact path still produces ambiguous failures or weak diagnostics.
+needs: Will keep the spec disciplined to currently stable selectors only and will record any checkpoint blockers precisely if the path is not truly green.
+files: feedbacks/latest.md, chat/contracts.md, chat/coordination.md, chat/agent_3.md, mt5pipe/state/public.py, mt5pipe/features/public.py, mt5pipe/labels/public.py, mt5pipe/compiler/public.py
+```
+
+### [2026-04-04 22:44:59 -04:00] agent_3 - phase4 checkpoint pass
+
+feedback_read: yes
+feedback_source: feedbacks/latest.md
+feedback_summary: Phase 4 should close only if the nonhuman dataset path is boringly reliable over a wider synchronized range and trust/reporting is stricter and more useful without architecture churn.
+phase: Phase 4 continuation
+area: compiler|truth|catalog|cli
+
+```
+agent: agent_3
+type: update
+area: compiler/truth/catalog/cli
+summary: Finalized the stable-selector Phase 4 checkpoint path. xau_m1_nonhuman_v1 now compiles from public selectors only over 2024-02-26..2024-03-01, includes multiscale/*, publishes correctly, inspects/diffs with deterministic trust summaries, and focused compiler/truth/catalog/CLI tests are green.
+needs: Checkpoint status is yellow rather than fully green because the live accepted artifact still carries research warnings: source_quality=62.87 (< preferred 75), HTF/event nulls are still present in the artifact, and some slice-specific columns are constant. Compiler/truth/catalog behavior itself is stable.
+files: mt5pipe/compiler/service.py, mt5pipe/truth/service.py, mt5pipe/cli/dataset_cmds.py, config/datasets/xau_m1_nonhuman_v1.yaml, config/datasets/xau_m1_core_v1.yaml, tests/test_compiler.py, tests/test_truth_core.py, tests/test_dataset_cli_compat.py, docs/parallel_dev_architecture.md, chat/contracts.md
+verification: pytest tests/test_compiler.py tests/test_truth_core.py tests/test_catalog.py tests/test_dataset_cli_compat.py -q -> 16 passed; python -m mt5pipe.cli.app dataset compile-dataset --spec config/datasets/xau_m1_core_v1.yaml --publish -> published/accepted 96.28; python -m mt5pipe.cli.app dataset compile-dataset --spec config/datasets/xau_m1_nonhuman_v1.yaml --publish -> published/accepted 96.28; inspect/diff by dataset:// refs returned deterministic trust decision/check-count/reason summaries
+```

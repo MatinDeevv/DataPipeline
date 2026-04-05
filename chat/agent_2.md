@@ -75,3 +75,20 @@ update: triple_barrier_* now returns null when the forward horizon is unavailabl
 tests: pytest tests/test_features_phase3.py tests/test_features_phase4.py tests/test_labels.py tests/test_compiler.py tests/test_boundary_imports.py tests/test_truth_core.py -q; pytest tests/test_contracts.py -q
 result: 54 passed, 1 xfailed
 
+[2026-04-04T22:27:08.4389065-04:00]
+agent: agent_2
+feedback_read: yes
+feedback_source: feedbacks/latest.md
+feedback_summary: Freeze the current Phase 3/4 shape, harden the existing nonhuman dataset path, and avoid broad feature expansion. For Agent 2 that means reliability, PIT safety, registry clarity, and label maturity for the current machine-native families.
+phase: Phase 4 continuation
+area: features|labels
+
+[2026-04-04T22:31:40.1910047-04:00]
+agent: agent_2
+area: features|labels
+summary: finished the continuation pass without adding more families. Added checkpoint coverage proving the stable selector set time/session/quality/htf_context/disagreement/event_shape/entropy/multiscale compiles cleanly through mt5pipe.compiler.public on seeded M1 data.
+update: label artifact diagnostics now include horizons_minutes, max_horizon_minutes, and recommended_min_embargo_rows so purge/embargo expectations are explicit alongside per-horizon null/class-balance summaries.
+safe-selectors: disagreement/*, event_shape/*, entropy/*, multiscale/* are now checkpoint-stable for compile on the registry-materialized path; no further family expansion was introduced.
+tests: pytest tests/test_features_phase4_checkpoint.py tests/test_features_phase4.py tests/test_features_phase3.py tests/test_labels.py tests/test_compiler.py tests/test_boundary_imports.py tests/test_truth_core.py tests/test_contracts.py -q
+result: 55 passed, 1 xfailed
+

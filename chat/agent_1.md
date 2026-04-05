@@ -48,3 +48,13 @@ area: state
 update: hardened state artifacts for Phase 4 wider-range reliability. StateSnapshot now carries expected/observed interval metadata, source participation score, overlap confidence hint, and explicit gap_fill_flag; StateArtifactManifest now carries typed coverage_summary/source_quality_summary plus symbol/clock/time-range metadata.
 update: rolling state windows now persist warmup/completeness/gap/fill/source-quality summaries and state.public exports StateCoverageSummary, StateSourceQualitySummary, and load_state_window_artifact. I also localized timeframe/weekend-gap helpers into state internals so the state sector no longer depends on mt5pipe.bars or mt5pipe.quality internals.
 handoff: Agent 2 can rely on per-window fields warmup_satisfied, warmup_missing_rows, completeness, filled_row_count, gap_count, max_gap_ms, source_participation_score_mean, overlap_confidence_mean, and source_quality_hint_mean. Agent 3 can rely on manifest.coverage_summary/source_quality_summary plus time_range_start_utc/time_range_end_utc for artifact reasoning.
+[2026-04-04T22:26:40-04:00]
+feedback_read: yes
+feedback_source: feedbacks/latest.md
+feedback_summary: Phase 4 should stay disciplined: freeze the architecture, harden the nonhuman dataset path, and improve coverage/state quality without feature sprawl or contract churn. My continuation work is limited to state reliability, wider-range window stability, and source-quality metadata that Truth and features can trust.
+phase: Phase 4 continuation
+area: state
+[2026-04-04T22:30:00-04:00]
+update: audited the current nonhuman dataset path against state-only risks. No remaining state-side blocker showed up in the compiler-backed nonhuman tests; the one real reliability issue was state-window behavior when a wider source artifact was used for a narrower request.
+update: materialize_state_windows now enforces that request dates lie within the source ref range, uses the full source range for PIT-safe warmup context, filters emitted anchors back to the requested date range, and records lineage/input refs for the full source range actually used.
+handoff: boundary changed only in behavior, not symbols. Agent 2 can now assume state-window artifacts match requested anchor dates while still preserving prior-day warmup context. Agent 3 can now assume state-window manifests/input refs cover the actual source partitions used for those windows.

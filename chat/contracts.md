@@ -224,3 +224,58 @@ impact: Agent 2/3 can stay on mt5pipe.state.public for window metadata and persi
 docs_updated: no
 notes: public surface remains additive and boundary-clean
 ```
+
+### [2026-04-04 22:44]
+
+```
+agent: agent_3
+type: contract-change
+module: mt5pipe.truth.service, mt5pipe.cli.dataset_cmds
+symbol: TrustReport.metrics.dataset_quality, warning_reasons semantics, compile-dataset|inspect-dataset|diff-dataset trust summaries
+old: truth warning reasons were coarse and sometimes duplicative; trust metrics did not surface compact dataset-quality detail; CLI summaries omitted decision_summary, rejection/warning reasons, and check-status counts
+new: truth reports now include dataset_quality metrics (quality_score, total_nulls, null-columns map, constant-columns list, duplicate timestamp count) and emit more specific warning reasons for source quality, null columns, and constant columns without duplicating generic warning codes; compile/inspect/diff now print trust_decision, trust_check_counts, trust_warning_reasons, and trust_rejection_reasons, with diff exposing trust-reason deltas
+impact: research users can diagnose accepted/rejected artifacts directly from compiler outputs without opening manifest/trust JSON by hand
+docs_updated: yes
+notes: this is a reporting hardening change only; trust hard-fail thresholds were not relaxed
+```
+
+### [2026-04-04 22:44]
+
+```
+agent: agent_3
+type: contract-change
+module: config/datasets/xau_m1_nonhuman_v1.yaml, config/datasets/xau_m1_core_v1.yaml
+symbol: example DatasetSpec selector bundle and synchronized date range
+old: example specs targeted a narrow 2026 slice; xau_m1_nonhuman_v1 pinned stale feature_artifact_refs that were no longer the stable machine-native path
+new: example specs now target the wider synchronized range 2024-02-26..2024-03-01; xau_m1_nonhuman_v1 compiles from stable public selectors only and includes multiscale/* while removing explicit feature_artifact_refs
+impact: compiler-facing workflows and tests now exercise the real Phase 4 checkpoint path through state_version_ref + stable selectors instead of stale artifact aliases
+docs_updated: yes
+notes: multiscale/* is included because the current public feature registry resolves multiscale.consistency@1.0.0 cleanly in the live workspace and focused tests
+```
+
+### [2026-04-04 22:31]
+
+```
+agent: agent_2
+type: contract-change
+module: mt5pipe.labels.service
+symbol: label manifest metadata.label_diagnostics.horizons_minutes/max_horizon_minutes/recommended_min_embargo_rows
+old: label_diagnostics exposed per-horizon null/class-balance summaries plus purge_rows/exclusions, but did not explicitly summarize the pack-wide horizon span or recommended embargo floor
+new: label_diagnostics now also includes horizons_minutes, max_horizon_minutes, and recommended_min_embargo_rows to make purge/embargo expectations explicit for compiler/inspection consumers
+impact: inspect/diff/trust consumers can reason about label horizon scope and minimum safe embargo directly from label artifact metadata without inferring it from raw columns
+docs_updated: yes
+notes: additive metadata only; label pack key, output columns, and generation logic stay unchanged
+```
+### [2026-04-04 22:30]
+
+```
+agent: agent_1
+type: contract-change
+module: mt5pipe.state.public / mt5pipe.state.service materialize_state_windows
+symbol: materialize_state_windows request-range behavior
+old: when a source StateArtifactRef/TickArtifactRef spanned a wider date range than the request, state windows were built across the full source and returned anchors outside the requested date range; lineage refs also only covered the request dates
+new: state windows may still use a wider source artifact for PIT-safe warmup context, but emitted window anchors are filtered to the requested date range, request dates must lie within the source ref range, and lineage/input refs cover the full source range actually used
+impact: Agent 2 can rely on state-window artifacts matching requested anchor dates while preserving prior-context warmup; Agent 3 can rely on state-window lineage covering the actual source partitions used
+docs_updated: no
+notes: no public symbol additions; boundary behavior is stricter and more deterministic for wider-range requests
+```

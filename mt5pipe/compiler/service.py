@@ -873,7 +873,15 @@ class DatasetCompiler:
         spec_index = feature_spec_index(catalog=self._catalog)
         resolved: dict[str, ResolvedFeatureSource] = {}
         for ref in spec.feature_artifact_refs:
-            manifest, manifest_path = self._resolve_manifest_with_path(ref)
+            try:
+                manifest, manifest_path = self._resolve_manifest_with_path(ref)
+            except KeyError as exc:
+                raise KeyError(
+                    "DatasetSpec feature_artifact_refs entry "
+                    f"'{ref}' could not be resolved in the compiler catalog. "
+                    "If this dataset should materialize stable features from selectors, "
+                    "remove the stale feature_artifact_refs entry and rely on feature_selectors."
+                ) from exc
             if manifest.artifact_kind != "feature_view":
                 raise ValueError(f"feature_artifact_refs must resolve to feature_view artifacts, got {manifest.artifact_kind}")
             self._ensure_artifact_registered(manifest, manifest_path, detail="resolved upstream feature artifact")

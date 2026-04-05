@@ -1,11 +1,11 @@
 schema_version: "1.0.0"
 dataset_name: "xau_m1_nonhuman"
 version: "1.0.0"
-description: "Phase 3 machine-native XAUUSD M1 dataset. Stable core families are compiler-materialized; disagreement/event_shape/entropy families are expected to resolve from registered feature artifacts."
+description: "Phase 4 machine-native XAUUSD M1 dataset over a wider synchronized range, built from stable public selectors only."
 symbols:
   - "XAUUSD"
-date_from: "2026-01-20"
-date_to: "2026-01-23"
+date_from: "2024-02-26"
+date_to: "2024-03-01"
 base_clock: "M1"
 state_version_ref: "state.default@1.0.0"
 feature_selectors:
@@ -16,10 +16,7 @@ feature_selectors:
   - "disagreement/*"
   - "event_shape/*"
   - "entropy/*"
-feature_artifact_refs:
-  - "feature.disagreement.state_disagreement.latest"
-  - "feature.event_shape.event_shape.latest"
-  - "feature.entropy.micro_entropy.latest"
+  - "multiscale/*"
 label_pack_ref: "core_tb_volscaled@1.0.0"
 filters:
   - "exclude:filled_rows"
@@ -31,6 +28,6 @@ embargo_rows: 240
 truth_policy_ref: "truth.default@1.0.0"
 publish_on_accept: true
 tags:
-  - "phase3"
+  - "phase4-checkpoint"
   - "xau"
   - "nonhuman"

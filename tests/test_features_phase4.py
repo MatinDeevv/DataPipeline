@@ -173,7 +173,10 @@ def test_label_diagnostics_report_tail_nulls_and_class_balance() -> None:
 
     diagnostics = _label_manifest_diagnostics(label_df, pack)
 
+    assert diagnostics["horizons_minutes"] == pack.horizons_minutes
+    assert diagnostics["max_horizon_minutes"] == max(pack.horizons_minutes)
     assert diagnostics["purge_rows"] == pack.purge_rows
+    assert diagnostics["recommended_min_embargo_rows"] == pack.purge_rows
     assert diagnostics["exclusions"] == pack.exclusions
     assert diagnostics["horizon_summaries"]["5m"]["future_return_null_rows"] == 5
     assert diagnostics["horizon_summaries"]["5m"]["direction_null_rows"] == 5
