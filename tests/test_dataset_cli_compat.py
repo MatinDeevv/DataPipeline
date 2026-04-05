@@ -288,3 +288,26 @@ def test_example_spec_loading() -> None:
     assert spec.feature_selectors == ["time/*", "session/*", "quality/*", "htf_context/*"]
     assert spec.label_pack_ref == "core_tb_volscaled@1.0.0"
     assert spec.split_policy == "temporal_holdout"
+
+
+def test_phase3_example_spec_loading() -> None:
+    spec = load_dataset_spec(Path("config/datasets/xau_m1_nonhuman_v1.yaml"))
+
+    assert spec.dataset_name == "xau_m1_nonhuman"
+    assert spec.symbols == ["XAUUSD"]
+    assert spec.base_clock == "M1"
+    assert spec.feature_selectors == [
+        "time/*",
+        "session/*",
+        "quality/*",
+        "htf_context/*",
+        "disagreement/*",
+        "event_shape/*",
+        "entropy/*",
+    ]
+    assert spec.feature_artifact_refs == [
+        "feature.disagreement.state_disagreement.latest",
+        "feature.event_shape.event_shape.latest",
+        "feature.entropy.micro_entropy.latest",
+    ]
+    assert spec.label_pack_ref == "core_tb_volscaled@1.0.0"

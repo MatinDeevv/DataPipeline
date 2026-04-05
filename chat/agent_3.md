@@ -54,3 +54,18 @@ summary: Started Phase 3 compiler/truth/catalog/CLI pass. Reading current compil
 needs: Will adapt to Agent 1/2 boundary changes through public modules only.
 files: chat/contracts.md, chat/coordination.md, chat/agent_3.md, mt5pipe/compiler/public.py, mt5pipe/state/public.py, mt5pipe/features/public.py, mt5pipe/labels/public.py
 ```
+
+### [2026-04-04 20:58:00 -04:00] agent_3 - phase3 pass complete
+
+feedback_read: yes
+feedback_source: feedbacks/latest.md
+feedback_summary: No active human review yet.
+
+```
+agent: agent_3
+type: update
+area: compiler/truth/catalog/cli
+summary: Implemented artifact-ref-aware compiler integration, Phase 3 truth gating, richer inspect/diff CLI summaries, and added the xau_m1_nonhuman_v1 example spec plus compiler-facing integration tests. Artifact-backed state builds now honor exclude:filled_rows through public state trust flags and/or _filled without importing state internals.
+needs: Real workspace execution of config/datasets/xau_m1_nonhuman_v1.yaml still depends on Agent 2 machine-native feature artifacts being present in the local catalog/worktree. The compiler path and tests are ready for that boundary through mt5pipe.features.public and artifact refs only.
+files: mt5pipe/compiler/public.py, mt5pipe/compiler/service.py, mt5pipe/truth/service.py, mt5pipe/cli/dataset_cmds.py, config/datasets/xau_m1_nonhuman_v1.yaml, config/datasets/xau_m1_core_v1.yaml, tests/test_compiler.py, tests/test_truth_core.py, tests/test_catalog.py, tests/test_dataset_cli_compat.py, docs/parallel_dev_architecture.md, chat/contracts.md, chat/coordination.md
+```

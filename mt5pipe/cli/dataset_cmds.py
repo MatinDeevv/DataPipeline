@@ -167,6 +167,24 @@ def _dataset_spec_ref(result: Any) -> str:
     return str(_first_present(result, "manifest.dataset_spec_ref", "dataset_spec_ref", default="-"))
 
 
+def _feature_selectors(result: Any) -> list[str]:
+    selectors = _first_present(result, "manifest.metadata.requested_feature_selectors", "requested_feature_selectors", default=[])
+    return [str(selector) for selector in _as_list(selectors)]
+
+
+def _feature_artifact_refs(result: Any) -> list[str]:
+    refs = _first_present(result, "manifest.metadata.feature_artifact_refs", "feature_artifact_refs", default=[])
+    return [str(ref) for ref in _as_list(refs)]
+
+
+def _source_modes(result: Any) -> dict[str, Any]:
+    return {str(key): value for key, value in _as_dict(_first_present(result, "manifest.metadata.source_modes", "source_modes", default={})).items()}
+
+
+def _build_row_stats(result: Any) -> dict[str, Any]:
+    return {str(key): value for key, value in _as_dict(_first_present(result, "manifest.metadata.build_row_stats", "build_row_stats", default={})).items()}
+
+
 def _lineage_refs(result: Any) -> dict[str, list[str]]:
     return {
         "state_artifacts": [str(ref) for ref in _as_list(_first_present(result, "manifest.state_artifact_refs", "state_artifact_refs", default=[]))],
@@ -219,6 +237,7 @@ def _compile_result_lines(result: Any) -> list[str]:
         f"logical: {_logical_name(result)}@{_logical_version(result)}",
         f"status: {_artifact_status(result)}",
         f"manifest_path: {_manifest_path(result)}",
+        f"split_rows: {_json(_split_rows(result))}",
         f"trust_status: {_trust_status(result)}",
         f"trust_score_total: {_format_float(_trust_score(result))}",
         f"published_ref: {published_ref or '-'}",
@@ -237,7 +256,11 @@ def _inspect_result_lines(result: Any) -> list[str]:
         f"split_rows: {_json(_split_rows(result))}",
         f"schema_columns_count: {len(schema_columns)}",
         f"schema_columns_sample: {_json(schema_columns[:8])}",
+        f"feature_selectors: {_json(_feature_selectors(result))}",
         f"feature_families: {_json(_feature_families(result))}",
+        f"feature_artifact_refs: {_json(_feature_artifact_refs(result))}",
+        f"source_modes: {_json(_source_modes(result))}",
+        f"build_row_stats: {_json(_build_row_stats(result))}",
         f"label_pack: {_label_pack_ref(result)}",
         f"trust_status: {_trust_status(result)}",
         f"trust_score_total: {_format_float(_trust_score(result))}",
@@ -278,13 +301,21 @@ def _diff_result_lines(result: Any) -> list[str]:
         f"right_artifact_id: {_artifact_id(right)}",
         f"left_spec_ref: {_dataset_spec_ref(left)}",
         f"right_spec_ref: {_dataset_spec_ref(right)}",
+        f"feature_selectors_left: {_json(_feature_selectors(left))}",
+        f"feature_selectors_right: {_json(_feature_selectors(right))}",
         f"feature_refs_added: {_json(sorted(right_features - left_features))}",
         f"feature_refs_removed: {_json(sorted(left_features - right_features))}",
+        f"feature_artifact_refs_left: {_json(_feature_artifact_refs(left))}",
+        f"feature_artifact_refs_right: {_json(_feature_artifact_refs(right))}",
         f"label_pack_left: {_label_pack_ref(left)}",
         f"label_pack_right: {_label_pack_ref(right)}",
         f"split_rows_left: {_json(left_rows)}",
         f"split_rows_right: {_json(right_rows)}",
         f"split_row_deltas: {_json(_split_row_deltas(left_rows, right_rows))}",
+        f"source_modes_left: {_json(_source_modes(left))}",
+        f"source_modes_right: {_json(_source_modes(right))}",
+        f"build_row_stats_left: {_json(_build_row_stats(left))}",
+        f"build_row_stats_right: {_json(_build_row_stats(right))}",
         f"schema_columns_added: {_json(sorted(right_schema - left_schema))}",
         f"schema_columns_removed: {_json(sorted(left_schema - right_schema))}",
         f"trust_status_left: {_trust_status(left)}",
@@ -387,11 +418,12 @@ def build_dataset_cmd(
 @dataset_app.command("compile-dataset")
 def compile_dataset_cmd(
     spec_path: str = typer.Option(..., "--spec", help="Path to DatasetSpec YAML/JSON"),
+    publish: bool = typer.Option(True, "--publish/--no-publish", help="Publish aliases when the trust gate accepts the artifact"),
     config_path: str = typer.Option("config/pipeline.yaml", "--config", help="Legacy adapter config path"),
 ) -> None:
-    """Compile a versioned dataset artifact from a DatasetSpec."""
+    """Compile a versioned dataset artifact from a spec-driven, artifact-aware DatasetSpec."""
     try:
-        result = _compile_dataset_spec(Path(spec_path), publish=True, config_path=config_path)
+        result = _compile_dataset_spec(Path(spec_path), publish=publish, config_path=config_path)
         typer.echo("\n".join(_compile_result_lines(result)))
         failure_reason = _compile_failure_reason(result)
         if failure_reason:
@@ -409,7 +441,7 @@ def inspect_dataset_cmd(
     artifact_ref: str = typer.Option(..., "--artifact", help="Artifact id, logical ref, or manifest path"),
     config_path: str = typer.Option("config/pipeline.yaml", "--config", help="Legacy adapter config path"),
 ) -> None:
-    """Inspect a compiled dataset artifact and its trust report."""
+    """Inspect a compiled dataset artifact, its lineage sources, and its trust report."""
     try:
         result = _inspect_artifact(artifact_ref, config_path=config_path)
         typer.echo("\n".join(_inspect_result_lines(result)))
@@ -424,7 +456,7 @@ def diff_dataset_cmd(
     right_ref: str = typer.Option(..., "--right", help="Right artifact id, logical ref, or manifest path"),
     config_path: str = typer.Option("config/pipeline.yaml", "--config", help="Legacy adapter config path"),
 ) -> None:
-    """Compare two compiled dataset artifacts."""
+    """Compare two compiled dataset artifacts with deterministic lineage-aware summaries."""
     try:
         result = _diff_artifacts(left_ref, right_ref, config_path=config_path)
         typer.echo("\n".join(_diff_result_lines(result)))

@@ -127,3 +127,45 @@ new: state.public now exposes the stable state-sector substrate for state/tick a
 impact: Agent 2 should import state substrate from mt5pipe.state.public only; Agent 3 can keep calling StateService while the boundary is now explicit
 docs_updated: no
 notes: state sector no longer imports compiler/catalog internals; manifests are written by local state helpers and can still be handed to compiler catalog duck-typed.
+
+### [2026-04-04 20:58]
+
+```
+agent: agent_3
+type: contract-change
+module: mt5pipe.compiler.public, mt5pipe.compiler.service, mt5pipe.compiler.models.LineageManifest.metadata
+symbol: compile_dataset_spec, inspect_artifact, diff_artifacts, ArtifactInspection, ArtifactDiff, DatasetSpec.state_artifact_ref/feature_artifact_refs/label_artifact_ref
+old: compiler-era dataset builds mainly assumed version-ref materialization, compiler.public did not present compile/inspect/diff as one stable surface, and artifact-ref state builds could not honor filled-row filtering from public state artifacts
+new: compiler.public re-exports compile/inspect/diff dataclasses and helpers; compiler manifests/inspection metadata now carry requested_feature_selectors, feature_artifact_refs, source_modes, build_row_stats, split_row_counts, state_artifact_ref, and label_artifact_ref; artifact-ref state builds derive filled-row exclusion from public state trust flags when raw _filled markers are not present
+impact: CLI/tests/other agents can stay on mt5pipe.compiler.public and artifact-backed Phase 3 datasets remain inspectable/diffable without cross-sector internal imports
+docs_updated: yes
+notes: config/datasets/xau_m1_nonhuman_v1.yaml is the Phase 3 example spec; real workspace execution still requires the referenced machine-native feature artifacts to be present in the local catalog/worktree
+```
+
+### [2026-04-04 20:58]
+
+```
+agent: agent_3
+type: contract-change
+module: mt5pipe.truth.service
+symbol: TruthService.evaluate_dataset / TrustReport publish gate
+old: truth evaluation only covered coarse dataset quality and did not explicitly reject the main Phase 3 artifact failure modes
+new: truth gate now enforces coverage, split integrity, duplicate primary-clock rows/leakage, required feature columns, per-family missingness thresholds for time/session/quality/htf_context/disagreement/event_shape/entropy, warmup/drop-row sanity, source quality, lineage completeness, and manifest hash integrity; hard-failure codes now include dataset_coverage_failure, split_integrity_failure, leakage_or_duplicate_timestamp_failure, missing_required_feature_columns, feature_family_missingness_threshold_exceeded, warmup_or_drop_row_sanity_failure, source_quality_below_threshold, lineage_incomplete, and manifest_hash_mismatch
+impact: compiler publication is deterministically blocked on bad Phase 3 artifacts and inspect/diff consumers can rely on richer trust reports
+docs_updated: yes
+notes: source quality now treats merge QA as a modifier on state quality instead of double-penalizing conflict behavior already reflected in state quality_score
+```
+
+### [2026-04-04 20:58]
+
+```
+agent: agent_3
+type: contract-change
+module: mt5pipe.cli.dataset_cmds
+symbol: dataset compile-dataset, inspect-dataset, diff-dataset
+old: CLI summaries omitted artifact-ref/source-mode/build-row detail and compile output did not expose explicit publish control
+new: compile-dataset supports --publish/--no-publish and prints split_rows; inspect-dataset and diff-dataset emit deterministic summaries for requested feature selectors, feature artifact refs, source modes, and build row stats
+impact: Phase 3 datasets can be inspected and compared from the CLI without manually opening manifest JSON
+docs_updated: yes
+notes: output mirrors compiler manifest metadata for inspectability and diffability
+```

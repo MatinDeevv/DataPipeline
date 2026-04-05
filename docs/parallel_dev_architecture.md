@@ -34,6 +34,7 @@ The top-level package is `mt5pipe/`. In architecture discussions, "pipeline" map
 - **Boundary module:** `mt5pipe/compiler/public.py`
 - **Tests:** `tests/test_compiler.py`, `tests/test_truth_core.py`, `tests/test_catalog.py`
 - **Responsibility:** Dataset compilation, truth gate, artifact catalog, CLI integration
+- **Public surface:** `DatasetSpec` supports version refs plus explicit artifact refs, and `mt5pipe.compiler.public` re-exports compile/inspect/diff helpers for deterministic dataset artifact workflows
 
 ---
 

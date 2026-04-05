@@ -61,6 +61,15 @@ MANDATORY_DATASET_COLUMNS = [
 
 DATASET_JOIN_KEYS = ["symbol", "timeframe", "time_utc"]
 DEFAULT_CONFIG_RELATIVE_PATH = Path("config/pipeline.yaml")
+STATE_CONTROL_COLUMNS = [
+    "_filled",
+    "quality_score",
+    "conflict_flag",
+    "trust_flags",
+    "source_quality_hint",
+    "disagreement_bps",
+    "spread_disagreement_bps",
+]
 
 
 @dataclass
@@ -549,6 +558,11 @@ class DatasetCompiler:
                 date_from=spec.date_from,
                 date_to=spec.date_to,
             )
+            base_df = self._augment_base_df_with_state_controls(
+                base_df=base_df,
+                state_df=state_df,
+                base_clock=spec.base_clock,
+            )
             return ResolvedStateInput(
                 artifact_id=manifest.artifact_id,
                 manifest=manifest,
@@ -574,9 +588,50 @@ class DatasetCompiler:
             manifest=getattr(state_result, "manifest"),
             manifest_path=getattr(state_result, "manifest_path"),
             state_df=getattr(state_result, "state_df"),
-            base_df=getattr(state_result, "base_df"),
+            base_df=self._augment_base_df_with_state_controls(
+                base_df=getattr(state_result, "base_df"),
+                state_df=getattr(state_result, "state_df"),
+                base_clock=spec.base_clock,
+            ),
             source_mode="materialized",
         )
+
+    def _augment_base_df_with_state_controls(
+        self,
+        *,
+        base_df: pl.DataFrame,
+        state_df: pl.DataFrame,
+        base_clock: str,
+    ) -> pl.DataFrame:
+        if base_df.is_empty() or state_df.is_empty():
+            return base_df
+
+        state_controls_df = state_df
+        if "_filled" not in state_controls_df.columns and "trust_flags" in state_controls_df.columns:
+            state_controls_df = state_controls_df.with_columns(
+                pl.col("trust_flags").map_elements(
+                    lambda flags: isinstance(flags, list) and "filled_gap" in flags,
+                    return_dtype=pl.Boolean,
+                ).alias("_filled")
+            )
+
+        control_columns = [
+            column for column in STATE_CONTROL_COLUMNS
+            if column in state_controls_df.columns and column not in base_df.columns
+        ]
+        if not control_columns:
+            return base_df
+
+        state_controls = state_controls_df.select(
+            [
+                pl.col("symbol"),
+                pl.lit(base_clock).alias("timeframe"),
+                pl.col("ts_utc").alias("time_utc"),
+                *[pl.col(column) for column in control_columns],
+            ]
+        )
+        state_controls = state_controls.unique(subset=DATASET_JOIN_KEYS, keep="last")
+        return base_df.join(state_controls, on=DATASET_JOIN_KEYS, how="left")
 
     def _resolve_feature_artifact_sources(
         self,
@@ -834,10 +889,22 @@ class DatasetCompiler:
             current = raw_filter.strip().lower()
             if not current:
                 continue
-            if current == "exclude:filled_rows" and "_filled" in df.columns:
-                before = len(df)
-                df = df.filter(~pl.col("_filled"))
-                filter_stats["filled_rows_removed"] += before - len(df)
+            if current == "exclude:filled_rows":
+                if "_filled" in df.columns:
+                    before = len(df)
+                    df = df.filter(~pl.col("_filled"))
+                    filter_stats["filled_rows_removed"] += before - len(df)
+                elif "trust_flags" in df.columns:
+                    before = len(df)
+                    df = df.filter(
+                        ~pl.col("trust_flags").map_elements(
+                            lambda flags: isinstance(flags, list) and "filled_gap" in flags,
+                            return_dtype=pl.Boolean,
+                        )
+                    )
+                    filter_stats["filled_rows_removed"] += before - len(df)
+                else:
+                    raise ValueError("DatasetSpec filter 'exclude:filled_rows' requires '_filled' or 'trust_flags'")
             elif current == "exclude:zero_source_rows" and "source_count" in df.columns:
                 before = len(df)
                 df = df.filter(pl.col("source_count") > 0)
@@ -977,6 +1044,9 @@ class DatasetCompiler:
         frame = self._store.read_dir(Path(manifest.artifact_uri))
         if frame.is_empty():
             raise FileNotFoundError(f"Artifact '{manifest.artifact_id}' has no readable parquet payload at {manifest.artifact_uri}")
+        dedup_keys = [column for column in ["symbol", "timeframe", "clock", time_col] if column in frame.columns]
+        if dedup_keys:
+            frame = frame.unique(subset=dedup_keys, keep="last")
         filtered = _filter_frame_to_range(
             frame,
             time_col=time_col,

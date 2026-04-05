@@ -98,10 +98,12 @@ def test_catalog_registers_and_resolves_artifact(tmp_path) -> None:
         stored_feature = catalog.get_feature_spec(feature_specs[0].key)
         assert stored_feature is not None
         assert stored_feature.family == feature_specs[0].family
+        assert any(spec.key == feature_specs[0].key for spec in catalog.list_feature_specs())
 
         stored_label_pack = catalog.get_label_pack(label_packs[0].key)
         assert stored_label_pack is not None
         assert stored_label_pack.label_pack_name == label_packs[0].label_pack_name
+        assert any(pack.key == label_packs[0].key for pack in catalog.list_label_packs())
 
         stored_build = catalog.get_build_run("build.1")
         assert stored_build is not None

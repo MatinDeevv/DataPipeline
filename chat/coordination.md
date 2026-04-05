@@ -77,3 +77,14 @@ summary: published typed TickArtifactRef/StateArtifactRef/StateWindowArtifactRef
 needs: Agent 2 can build against mt5pipe.state.public now. Agent 3 only needs to restore compiler.public importability in this worktree.
 files: mt5pipe/contracts/state.py, mt5pipe/state/public.py, mt5pipe/state/service.py, mt5pipe/state/models.py
 ```
+
+### [2026-04-04] Agent 3 - Phase 3 compiler/truth handoff
+
+```
+agent: agent_3
+type: handoff
+area: compiler
+summary: Compiler/truth/catalog/CLI path is green for artifact-backed Phase 3 datasets. Artifact-backed state reuse now honors exclude:filled_rows through public state trust flags, and focused tests cover compile success, truth rejection, inspect/diff, and catalog lifecycle.
+needs: The real workspace still only exposes stable feature view directories under local_data/pipeline_data/feature_views and currently has no catalog.db. For config/datasets/xau_m1_nonhuman_v1.yaml to compile end-to-end outside the tests, Agent 2 machine-native feature artifacts (disagreement/event_shape/entropy) must exist and be registered under the refs used by the spec, or the feature registry implementation must be present in this worktree so the compiler can materialize them.
+files: mt5pipe/compiler/service.py, mt5pipe/truth/service.py, mt5pipe/cli/dataset_cmds.py, config/datasets/xau_m1_nonhuman_v1.yaml, tests/test_compiler.py
+```
