@@ -324,6 +324,83 @@ def test_truth_rejects_manifest_hash_mismatch(tmp_path) -> None:
     assert "manifest_hash_mismatch" in report.hard_failures
 
 
+def test_truth_rejects_required_dual_broker_dataset_without_synchronized_coverage(tmp_path) -> None:
+    dataset_df = _phase4_truth_dataset()
+    split_frames = _phase4_truth_split_frames(dataset_df)
+    feature_specs = _phase4_truth_feature_specs()
+    label_pack = _phase4_truth_label_pack()
+    spec = _phase4_truth_spec().model_copy(
+        update={
+            "required_raw_brokers": ["broker_a", "broker_b"],
+            "require_synchronized_raw_coverage": True,
+            "require_dual_source_overlap": True,
+            "min_dual_source_ratio": 0.05,
+        }
+    )
+    manifest = _phase4_truth_manifest(spec, feature_specs, label_pack, artifact_id="dataset.xau_nonhuman.bad_source")
+    paths = StoragePaths(tmp_path / "pipeline_data")
+    store = ParquetStore(compression="snappy", row_group_size=1000)
+    date = dt.date(2026, 4, 1)
+
+    raw_b = pl.DataFrame(
+        {
+            "broker_id": ["broker_b"],
+            "symbol": ["XAUUSD"],
+            "time_utc": [dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC)],
+            "time_msc": [int(dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC).timestamp() * 1000)],
+            "bid": [3000.0],
+            "ask": [3000.2],
+            "last": [0.0],
+            "volume": [1.0],
+            "volume_real": [0.0],
+            "flags": [6],
+            "ingest_ts": [dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC)],
+        }
+    )
+    store.write(raw_b, paths.raw_ticks_file("broker_b", "XAUUSD", date))
+    merge_qa = pl.DataFrame(
+        [
+            {
+                "time_utc": dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC),
+                "date": "2026-04-01",
+                "symbol": "XAUUSD",
+                "dual_source_ratio": 0.0,
+                "conflicts": 0,
+                "bucket_both": 0,
+                "canonical_dual_rows": 0,
+            }
+        ]
+    )
+    store.write(merge_qa, paths.merge_qa_file("XAUUSD", date))
+
+    state_df = pl.DataFrame(
+        {
+            "quality_score": [95.0, 95.0],
+            "conflict_flag": [False, False],
+            "trust_flags": [[], []],
+        }
+    )
+
+    report = TruthService().evaluate_dataset(
+        artifact_id=manifest.artifact_id,
+        dataset_df=dataset_df,
+        split_frames=split_frames,
+        spec=spec,
+        feature_specs=feature_specs,
+        label_pack=label_pack,
+        manifest=manifest,
+        paths=paths,
+        store=store,
+        state_df=state_df,
+    )
+
+    assert report.status == "rejected"
+    assert report.accepted_for_publication is False
+    assert "source_quality_below_threshold" in report.hard_failures
+    assert any("synchronized raw coverage is incomplete" in reason for reason in report.rejection_reasons)
+    assert any("dual-source overlap is required" in reason for reason in report.rejection_reasons)
+
+
 def test_truth_rejects_feature_family_missingness_threshold_breach(tmp_path) -> None:
     dataset_df = pl.DataFrame(
         {

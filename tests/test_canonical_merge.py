@@ -16,6 +16,7 @@ from mt5pipe.merge.canonical import (
     _percentile_or_zero,
     _resolve_bucket,
     _score_quote,
+    merge_canonical_ticks,
 )
 
 
@@ -147,3 +148,53 @@ class TestMergeDiagnosticsHelpers:
         df_b = pl.DataFrame({"time_msc": [65_000, 125_000, 185_000]})
         overlap = _count_wallclock_overlap_minutes(df_a, df_b)
         assert overlap == 2
+
+
+def test_merge_rerun_overwrites_daily_diagnostics(paths, store, merge_cfg: MergeConfig) -> None:
+    date = dt.date(2026, 4, 2)
+    timestamps_a = [dt.datetime(2026, 4, 2, 0, 0, tzinfo=dt.timezone.utc), dt.datetime(2026, 4, 2, 0, 1, tzinfo=dt.timezone.utc)]
+    timestamps_b = [ts + dt.timedelta(milliseconds=50) for ts in timestamps_a]
+
+    raw_a = pl.DataFrame(
+        {
+            "broker_id": ["broker_a"] * len(timestamps_a),
+            "symbol": ["XAUUSD"] * len(timestamps_a),
+            "time_utc": timestamps_a,
+            "time_msc": [int(ts.timestamp() * 1000) for ts in timestamps_a],
+            "bid": [3000.0, 3000.1],
+            "ask": [3000.2, 3000.3],
+            "last": [0.0, 0.0],
+            "volume": [1.0, 1.0],
+            "volume_real": [0.0, 0.0],
+            "flags": [6, 6],
+            "ingest_ts": timestamps_a,
+        }
+    )
+    raw_b = pl.DataFrame(
+        {
+            "broker_id": ["broker_b"] * len(timestamps_b),
+            "symbol": ["XAUUSD"] * len(timestamps_b),
+            "time_utc": timestamps_b,
+            "time_msc": [int(ts.timestamp() * 1000) for ts in timestamps_b],
+            "bid": [3000.01, 3000.11],
+            "ask": [3000.19, 3000.29],
+            "last": [0.0, 0.0],
+            "volume": [1.0, 1.0],
+            "volume_real": [0.0, 0.0],
+            "flags": [6, 6],
+            "ingest_ts": timestamps_b,
+        }
+    )
+
+    store.write(raw_a, paths.raw_ticks_file("broker_a", "XAUUSD", date))
+    store.write(raw_b, paths.raw_ticks_file("broker_b", "XAUUSD", date))
+
+    merge_canonical_ticks("broker_a", "broker_b", "XAUUSD", date, paths, store, merge_cfg)
+    merge_canonical_ticks("broker_a", "broker_b", "XAUUSD", date, paths, store, merge_cfg)
+
+    canonical = store.read_dir(paths.canonical_ticks_dir("XAUUSD", date))
+    assert canonical.height == 2
+    diagnostic_files = sorted(paths.merge_diagnostics_dir("XAUUSD", date).glob("*.parquet"))
+    assert len(diagnostic_files) == 1
+    diagnostics = store.read_dir(paths.merge_diagnostics_dir("XAUUSD", date))
+    assert diagnostics.height == 1

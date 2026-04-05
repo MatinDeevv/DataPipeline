@@ -129,6 +129,7 @@ class TruthService:
 
         resolved_state_df = state_df if state_df is not None else pl.DataFrame()
         source_check = self._source_quality_check(
+            spec=spec,
             symbol=spec.symbols[0],
             date_from=spec.date_from,
             date_to=spec.date_to,
@@ -548,6 +549,7 @@ class TruthService:
     def _source_quality_check(
         self,
         *,
+        spec: DatasetSpec,
         symbol: str,
         date_from: dt.date,
         date_to: dt.date,
@@ -555,9 +557,18 @@ class TruthService:
         store: ParquetStore,
         state_df: pl.DataFrame,
     ) -> QaCheckResult:
-        metrics = self._source_quality_metrics(symbol, date_from, date_to, paths, store, state_df)
+        metrics = self._source_quality_metrics(
+            spec=spec,
+            symbol=symbol,
+            date_from=date_from,
+            date_to=date_to,
+            paths=paths,
+            store=store,
+            state_df=state_df,
+        )
         score = self._source_quality_score(metrics)
-        failed = score < self.MIN_SOURCE_QUALITY_SCORE
+        requirement_failures = [str(reason) for reason in metrics.get("requirement_failures", [])]
+        failed = bool(requirement_failures) or score < self.MIN_SOURCE_QUALITY_SCORE
         warning = not failed and score < self.PREFERRED_SOURCE_QUALITY_SCORE
         return QaCheckResult(
             check_name="source_quality",
@@ -567,8 +578,18 @@ class TruthService:
             thresholds={
                 "min_source_quality_score": self.MIN_SOURCE_QUALITY_SCORE,
                 "preferred_source_quality_score": self.PREFERRED_SOURCE_QUALITY_SCORE,
+                "required_raw_brokers": list(spec.required_raw_brokers),
+                "require_synchronized_raw_coverage": spec.require_synchronized_raw_coverage,
+                "require_dual_source_overlap": spec.require_dual_source_overlap,
+                "min_dual_source_ratio": spec.min_dual_source_ratio,
             },
-            failure_reason="source/merge quality metrics are below publication threshold" if failed else "",
+            failure_reason=(
+                "; ".join(requirement_failures)
+                if requirement_failures
+                else "source/merge quality metrics are below publication threshold"
+                if failed
+                else ""
+            ),
         )
 
     def _lineage_check(self, manifest: LineageManifest) -> QaCheckResult:
@@ -637,6 +658,8 @@ class TruthService:
 
     def _source_quality_metrics(
         self,
+        *,
+        spec: DatasetSpec,
         symbol: str,
         date_from: dt.date,
         date_to: dt.date,
@@ -644,25 +667,50 @@ class TruthService:
         store: ParquetStore,
         state_df: pl.DataFrame,
     ) -> dict[str, object]:
-        qa_frames: list[pl.DataFrame] = []
-        diagnostic_frames: list[pl.DataFrame] = []
+        qa_rows: list[dict[str, object]] = []
+        diagnostic_rows: list[dict[str, object]] = []
+        requested_dates: list[str] = []
         current = date_from
         while current <= date_to:
-            qa_day = store.read_dir(paths.merge_qa_dir(symbol, current))
-            if not qa_day.is_empty():
-                qa_frames.append(qa_day)
-            diagnostic_day = store.read_dir(paths.merge_diagnostics_dir(symbol, current))
-            if not diagnostic_day.is_empty():
-                diagnostic_frames.append(diagnostic_day)
+            requested_dates.append(current.isoformat())
+            qa_row = self._latest_daily_observability_row(store.read_dir(paths.merge_qa_dir(symbol, current)))
+            if qa_row is not None:
+                qa_rows.append(qa_row)
+            diagnostic_row = self._latest_daily_observability_row(store.read_dir(paths.merge_diagnostics_dir(symbol, current)))
+            if diagnostic_row is not None:
+                diagnostic_rows.append(diagnostic_row)
             current += dt.timedelta(days=1)
 
-        merge_df = pl.concat(qa_frames, how="diagonal_relaxed") if qa_frames else pl.DataFrame()
-        diagnostic_df = pl.concat(diagnostic_frames, how="diagonal_relaxed") if diagnostic_frames else pl.DataFrame()
-        state_rows = float(len(state_df))
-        return {
+        merge_df = pl.DataFrame(qa_rows) if qa_rows else pl.DataFrame()
+        diagnostic_df = pl.DataFrame(diagnostic_rows) if diagnostic_rows else pl.DataFrame()
+        observability_df = merge_df if not merge_df.is_empty() else diagnostic_df
+        observability_source = "merge_qa" if not merge_df.is_empty() else "merge_diagnostics" if not diagnostic_df.is_empty() else "none"
+
+        required_raw_broker_stats = self._required_raw_broker_stats(
+            spec=spec,
+            symbol=symbol,
+            date_from=date_from,
+            date_to=date_to,
+            paths=paths,
+            store=store,
+        )
+        requested_date_set = set(requested_dates)
+        covered_by_broker = {
+            broker_id: set(stats.get("covered_dates", []))
+            for broker_id, stats in required_raw_broker_stats.items()
+        }
+        synchronized_dates = set.intersection(*covered_by_broker.values()) if covered_by_broker else set()
+        asymmetric_dates = set.union(*covered_by_broker.values()) - synchronized_dates if covered_by_broker else set()
+        missing_dates = {
+            broker_id: sorted(requested_date_set - covered_dates)
+            for broker_id, covered_dates in covered_by_broker.items()
+        }
+
+        metrics = {
+            "required_raw_brokers": list(spec.required_raw_brokers),
             "merge_qa_days": float(merge_df.height),
             "merge_diagnostics_days": float(diagnostic_df.height),
-            "merge_observability_source": "merge_qa" if not merge_df.is_empty() else "merge_diagnostics" if not diagnostic_df.is_empty() else "none",
+            "merge_observability_source": observability_source,
             "dual_source_ratio_mean": float(merge_df["dual_source_ratio"].mean()) if "dual_source_ratio" in merge_df.columns else 0.0,
             "merge_conflict_mean": float(merge_df["conflicts"].mean()) if "conflicts" in merge_df.columns else 0.0,
             "diagnostic_dual_source_ratio_mean": (
@@ -671,7 +719,30 @@ class TruthService:
             "diagnostic_conflict_mean": (
                 float(diagnostic_df["conflicts"].mean()) if "conflicts" in diagnostic_df.columns else 0.0
             ),
-            "state_rows": state_rows,
+            "effective_observability_days": float(observability_df.height),
+            "effective_dual_source_ratio_mean": (
+                float(observability_df["dual_source_ratio"].mean()) if "dual_source_ratio" in observability_df.columns else 0.0
+            ),
+            "effective_conflict_mean": (
+                float(observability_df["conflicts"].mean()) if "conflicts" in observability_df.columns else 0.0
+            ),
+            "dual_source_days": int(
+                observability_df.filter(
+                    (pl.col("dual_source_ratio") > 0.0)
+                    | (pl.col("canonical_dual_rows") > 0)
+                    | (pl.col("bucket_both") > 0)
+                ).height
+            ) if not observability_df.is_empty() and {"dual_source_ratio", "canonical_dual_rows", "bucket_both"}.issubset(set(observability_df.columns)) else 0,
+            "bucket_both_total": int(observability_df["bucket_both"].sum()) if "bucket_both" in observability_df.columns else 0,
+            "canonical_dual_rows_total": int(observability_df["canonical_dual_rows"].sum()) if "canonical_dual_rows" in observability_df.columns else 0,
+            "required_raw_broker_stats": required_raw_broker_stats,
+            "required_raw_missing_dates": missing_dates,
+            "required_raw_asymmetric_dates": sorted(asymmetric_dates),
+            "synchronized_raw_days": len(synchronized_dates),
+            "synchronized_raw_coverage_ratio": (
+                round(len(synchronized_dates) / len(requested_dates), 6) if requested_dates else 0.0
+            ),
+            "state_rows": float(len(state_df)),
             "state_quality_mean": float(state_df["quality_score"].mean()) if "quality_score" in state_df.columns and not state_df.is_empty() else 0.0,
             "state_conflict_rate": float(state_df["conflict_flag"].cast(pl.Float64).mean()) if "conflict_flag" in state_df.columns and not state_df.is_empty() else 0.0,
             "state_filled_ratio": float(
@@ -681,30 +752,135 @@ class TruthService:
                 ).mean()
             ) if "trust_flags" in state_df.columns and not state_df.is_empty() else 0.0,
         }
+        metrics["requirement_failures"] = self._source_requirement_failures(spec, metrics)
+        return metrics
 
     def _source_quality_score(self, metrics: dict[str, object]) -> float:
-        state_quality_mean = metrics.get("state_quality_mean", 0.0)
-        merge_qa_days = metrics.get("merge_qa_days", 0.0)
-        dual_source_ratio_mean = metrics.get("dual_source_ratio_mean", 0.0)
-        merge_conflict_mean = metrics.get("merge_conflict_mean", 0.0)
-        state_conflict_rate = metrics.get("state_conflict_rate", 0.0)
-        state_filled_ratio = metrics.get("state_filled_ratio", 0.0)
+        state_quality_mean = float(metrics.get("state_quality_mean", 0.0) or 0.0)
+        effective_observability_days = float(metrics.get("effective_observability_days", 0.0) or 0.0)
+        effective_dual_source_ratio_mean = float(metrics.get("effective_dual_source_ratio_mean", 0.0) or 0.0)
+        effective_conflict_mean = float(metrics.get("effective_conflict_mean", 0.0) or 0.0)
+        synchronized_raw_coverage_ratio = float(metrics.get("synchronized_raw_coverage_ratio", 0.0) or 0.0)
+        state_conflict_rate = float(metrics.get("state_conflict_rate", 0.0) or 0.0)
+        state_filled_ratio = float(metrics.get("state_filled_ratio", 0.0) or 0.0)
 
         base = state_quality_mean if state_quality_mean > 0 else 70.0
-        dual_source_component = min(max(dual_source_ratio_mean, 0.0) * 100.0, 100.0)
-        if merge_qa_days <= 0:
-            score = base
-        else:
-            score = base * 0.85 + dual_source_component * 0.15
-            score -= min(max(merge_conflict_mean, 0.0) * 10.0, 10.0)
+        dual_source_component = min(max(effective_dual_source_ratio_mean, 0.0) * 100.0, 100.0)
+        synchronized_coverage_component = min(max(synchronized_raw_coverage_ratio, 0.0) * 100.0, 100.0)
+        score = base
+        if effective_observability_days > 0:
+            score += max(dual_source_component - 50.0, 0.0) * 0.10
+            score += max(synchronized_coverage_component - 50.0, 0.0) * 0.05
+            score -= min(max(effective_conflict_mean, 0.0) * 10.0, 10.0)
 
-        # quality_score already captures most state-level conflict behavior, so only
-        # penalize conflict rate directly when the state artifact does not expose it.
         if state_quality_mean <= 0:
             score -= min(max(state_conflict_rate, 0.0) * 20.0, 10.0)
 
         score -= min(max(state_filled_ratio, 0.0) * 35.0, 15.0)
         return round(max(0.0, min(100.0, score)), 4)
+
+    @staticmethod
+    def _latest_daily_observability_row(df: pl.DataFrame) -> dict[str, object] | None:
+        if df.is_empty():
+            return None
+        sort_columns = [column for column in ["time_utc", "date"] if column in df.columns]
+        if sort_columns:
+            df = df.sort(sort_columns)
+        return df.tail(1).row(0, named=True)
+
+    def _required_raw_broker_stats(
+        self,
+        *,
+        spec: DatasetSpec,
+        symbol: str,
+        date_from: dt.date,
+        date_to: dt.date,
+        paths: StoragePaths,
+        store: ParquetStore,
+    ) -> dict[str, dict[str, object]]:
+        stats_by_broker: dict[str, dict[str, object]] = {}
+        for broker_id in spec.required_raw_brokers:
+            covered_dates: list[str] = []
+            total_ticks_written = 0
+            first_timestamp: dt.datetime | None = None
+            last_timestamp: dt.datetime | None = None
+            current = date_from
+            while current <= date_to:
+                day_df = store.read_dir(paths.raw_ticks_dir(broker_id, symbol, current))
+                if not day_df.is_empty():
+                    covered_dates.append(current.isoformat())
+                    total_ticks_written += day_df.height
+                    if "time_utc" in day_df.columns:
+                        day_first = day_df["time_utc"].min()
+                        day_last = day_df["time_utc"].max()
+                        if first_timestamp is None or (day_first is not None and day_first < first_timestamp):
+                            first_timestamp = day_first
+                        if last_timestamp is None or (day_last is not None and day_last > last_timestamp):
+                            last_timestamp = day_last
+                current += dt.timedelta(days=1)
+
+            stats_by_broker[broker_id] = {
+                "days_requested": (date_to - date_from).days + 1,
+                "days_written": len(covered_dates),
+                "total_ticks_written": total_ticks_written,
+                "covered_dates": covered_dates,
+                "first_timestamp": first_timestamp.isoformat() if first_timestamp else "",
+                "last_timestamp": last_timestamp.isoformat() if last_timestamp else "",
+            }
+        return stats_by_broker
+
+    @staticmethod
+    def _source_requirement_failures(spec: DatasetSpec, metrics: dict[str, object]) -> list[str]:
+        failures: list[str] = []
+        required_raw_brokers = [str(broker) for broker in metrics.get("required_raw_brokers", [])]
+
+        if spec.require_synchronized_raw_coverage:
+            missing_dates = {
+                broker_id: [str(date) for date in dates]
+                for broker_id, dates in dict(metrics.get("required_raw_missing_dates", {})).items()
+                if dates
+            }
+            asymmetric_dates = [str(date) for date in metrics.get("required_raw_asymmetric_dates", [])]
+            synchronized_raw_coverage_ratio = float(metrics.get("synchronized_raw_coverage_ratio", 0.0) or 0.0)
+
+            if missing_dates:
+                details = "; ".join(
+                    f"{broker_id} missing {TruthService._format_name_sample(sorted(values))}"
+                    for broker_id, values in sorted(missing_dates.items())
+                )
+                failures.append(f"synchronized raw coverage is incomplete for required brokers: {details}")
+            if asymmetric_dates:
+                failures.append(
+                    "required raw coverage is asymmetric across brokers: "
+                    f"{TruthService._format_name_sample(sorted(asymmetric_dates))}"
+                )
+            if required_raw_brokers and synchronized_raw_coverage_ratio < 1.0 and not missing_dates and not asymmetric_dates:
+                failures.append(
+                    f"synchronized raw coverage ratio is {synchronized_raw_coverage_ratio:.4f}, expected 1.0000"
+                )
+
+        if spec.require_dual_source_overlap:
+            observability_source = str(metrics.get("merge_observability_source", "none"))
+            bucket_both_total = int(metrics.get("bucket_both_total", 0) or 0)
+            canonical_dual_rows_total = int(metrics.get("canonical_dual_rows_total", 0) or 0)
+            dual_source_days = int(metrics.get("dual_source_days", 0) or 0)
+            effective_dual_source_ratio_mean = float(metrics.get("effective_dual_source_ratio_mean", 0.0) or 0.0)
+            if observability_source == "none":
+                failures.append("dual-source overlap is required but no merge observability artifacts were found")
+            if bucket_both_total <= 0 or canonical_dual_rows_total <= 0 or dual_source_days <= 0:
+                failures.append(
+                    "dual-source overlap is required but observed "
+                    f"bucket_both_total={bucket_both_total}, "
+                    f"canonical_dual_rows_total={canonical_dual_rows_total}, "
+                    f"dual_source_days={dual_source_days}"
+                )
+            if effective_dual_source_ratio_mean < spec.min_dual_source_ratio:
+                failures.append(
+                    f"effective_dual_source_ratio_mean={effective_dual_source_ratio_mean:.6f} "
+                    f"is below required min_dual_source_ratio={spec.min_dual_source_ratio:.6f}"
+                )
+
+        return failures
 
     def _dataset_quality_metrics(
         self,
@@ -974,7 +1150,10 @@ class TruthService:
         if check.check_name == "source_quality":
             merge_observability_source = str(check.metrics.get("merge_observability_source", "none"))
             observability_detail = (
-                f"merge_qa_days={float(check.metrics.get('merge_qa_days', 0.0)):.0f}"
+                (
+                    f"merge_qa_days={float(check.metrics.get('merge_qa_days', 0.0)):.0f}, "
+                    f"dual_source_ratio_mean={float(check.metrics.get('dual_source_ratio_mean', 0.0)):.4f}"
+                )
                 if merge_observability_source == "merge_qa"
                 else (
                     f"merge_diagnostics_days={float(check.metrics.get('merge_diagnostics_days', 0.0)):.0f}, "
@@ -986,6 +1165,7 @@ class TruthService:
             return (
                 f"score {check.score:.2f} is below preferred {self.PREFERRED_SOURCE_QUALITY_SCORE:.2f}; "
                 f"{observability_detail}; "
+                f"synchronized_raw_coverage_ratio={float(check.metrics.get('synchronized_raw_coverage_ratio', 0.0)):.4f}; "
                 f"state_quality_mean={float(check.metrics.get('state_quality_mean', 0.0)):.2f}, "
                 f"state_filled_ratio={float(check.metrics.get('state_filled_ratio', 0.0)):.4f}"
             )

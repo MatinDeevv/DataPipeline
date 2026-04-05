@@ -28,6 +28,16 @@ def load_label_artifact(
     date_to: dt.date | None = None,
 ) -> pl.DataFrame:
     """Load a persisted label view by pack key and base clock."""
+    if ref.artifact_id:
+        artifact_root = paths.label_artifact_root(ref.label_pack_key, ref.clock, ref.artifact_id)
+        artifact_frame = store.read_dir(artifact_root)
+        if not artifact_frame.is_empty():
+            if date_from is None or date_to is None:
+                return artifact_frame.sort("time_utc")
+            return artifact_frame.filter(
+                pl.col("time_utc").dt.date().is_between(date_from, date_to)
+            ).sort("time_utc")
+
     if date_from is None or date_to is None:
         return store.read_dir(paths.root / "label_views" / f"label_pack={ref.label_pack_key}" / f"clock={ref.clock}")
 

@@ -107,10 +107,7 @@ class FeatureService:
                 logical_name=spec.key,
                 logical_version=spec.version,
                 artifact_uri=str(
-                    self._paths.root
-                    / "feature_views"
-                    / f"feature={spec.key}"
-                    / f"clock={spec.output_clock}"
+                    self._paths.feature_artifact_root(spec.key, spec.output_clock, artifact_id)
                 ),
                 content_hash=content_hash,
                 build_id=build_id,
@@ -137,7 +134,7 @@ class FeatureService:
                 },
             )
 
-            self._write_feature_partitions(spec, feature_df)
+            self._write_feature_partitions(spec, artifact_id, feature_df)
             manifest_path = write_manifest_sidecar(manifest, self._paths)
             self._catalog.register_artifact(manifest, str(manifest_path))
             artifacts.append(MaterializedFeatureArtifact(
@@ -250,11 +247,15 @@ class FeatureService:
             current += dt.timedelta(days=1)
         return sorted(set(refs))
 
-    def _write_feature_partitions(self, spec: FeatureSpec, feature_df: pl.DataFrame) -> None:
+    def _write_feature_partitions(self, spec: FeatureSpec, artifact_id: str, feature_df: pl.DataFrame) -> None:
         dated = feature_df.with_columns(pl.col("time_utc").dt.date().alias("_date"))
         for date_val in dated["_date"].unique().sort().to_list():
             day_df = dated.filter(pl.col("_date") == date_val).drop("_date")
             self._store.write(day_df, self._paths.feature_view_file(spec.key, spec.output_clock, date_val))
+            self._store.write(
+                day_df,
+                self._paths.feature_artifact_file(spec.key, spec.output_clock, artifact_id, date_val),
+            )
 
 
 def _family_builder(family: str):

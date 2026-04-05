@@ -187,7 +187,11 @@ def _register_state_artifact(
         }
     )
     artifact_id = build_stage_artifact_id("state", logical_name, created_at, content_hash)
-    artifact_uri = paths.root / "state" / "symbol=XAUUSD" / "clock=M1" / f"state_version={state_version_ref}"
+    artifact_uri = paths.state_artifact_root("XAUUSD", "M1", state_version_ref, artifact_id)
+    dated = state_df.with_columns(pl.col("ts_utc").dt.date().alias("_date"))
+    for date_val in dated["_date"].unique().sort().to_list():
+        day_df = dated.filter(pl.col("_date") == date_val).drop("_date")
+        store.write(day_df, paths.state_artifact_file("XAUUSD", "M1", date_val, state_version_ref, artifact_id))
     manifest = LineageManifest(
         manifest_id=build_stage_manifest_id("state", logical_name, created_at, content_hash),
         artifact_id=artifact_id,
@@ -267,6 +271,10 @@ def _write_spec(
     state_artifact_ref: str | None = None,
     feature_artifact_refs: list[str] | None = None,
     label_pack_ref: str = "core_tb_volscaled@1.0.0",
+    required_raw_brokers: list[str] | None = None,
+    require_synchronized_raw_coverage: bool = False,
+    require_dual_source_overlap: bool = False,
+    min_dual_source_ratio: float = 0.0,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -293,6 +301,17 @@ def _write_spec(
             'feature_artifact_refs:',
             *[f'  - "{ref}"' for ref in feature_artifact_refs],
         ])
+    if required_raw_brokers:
+        lines.extend([
+            "required_raw_brokers:",
+            *[f'  - "{broker}"' for broker in required_raw_brokers],
+        ])
+    if require_synchronized_raw_coverage:
+        lines.append("require_synchronized_raw_coverage: true")
+    if require_dual_source_overlap:
+        lines.append("require_dual_source_overlap: true")
+    if min_dual_source_ratio > 0.0:
+        lines.append(f"min_dual_source_ratio: {min_dual_source_ratio}")
     lines.extend([
         f'label_pack_ref: "{label_pack_ref}"',
         'filters:',
@@ -439,11 +458,12 @@ def _register_feature_artifact(
         }
     )
     artifact_id = build_stage_artifact_id("feature_view", spec.key, created_at, content_hash)
-    artifact_uri = paths.root / "feature_views" / f"feature={spec.key}" / f"clock={spec.output_clock}"
+    artifact_uri = paths.feature_artifact_root(spec.key, spec.output_clock, artifact_id)
     dated = frame.with_columns(pl.col("time_utc").dt.date().alias("_date"))
     for date_val in dated["_date"].unique().sort().to_list():
         day_df = dated.filter(pl.col("_date") == date_val).drop("_date")
         store.write(day_df, paths.feature_view_file(spec.key, spec.output_clock, date_val))
+        store.write(day_df, paths.feature_artifact_file(spec.key, spec.output_clock, artifact_id, date_val))
 
     manifest = LineageManifest(
         manifest_id=build_stage_manifest_id("feature_view", spec.key, created_at, content_hash),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from typing import TYPE_CHECKING
 
 import numpy as np
 import polars as pl
@@ -15,6 +16,9 @@ from mt5pipe.utils.logging import get_logger
 from mt5pipe.utils.time import utc_now
 
 log = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from mt5pipe.storage.checkpoint_db import CheckpointDB
 
 
 def fetch_ticks_chunk(
@@ -68,8 +72,9 @@ def store_ticks_by_date(
     symbol: str,
     paths: StoragePaths,
     store: ParquetStore,
+    checkpoint_db: "CheckpointDB | None" = None,
 ) -> int:
-    """Partition ticks by date and write to Parquet. Returns total rows written."""
+    """Partition ticks by date and write to Parquet. Returns net-new rows after dedup."""
     if df.is_empty():
         return 0
 
@@ -82,8 +87,22 @@ def store_ticks_by_date(
     for date_val in df["_date"].unique().sort().to_list():
         day_df = df.filter(pl.col("_date") == date_val).drop("_date")
         path = paths.raw_ticks_file(broker_id, symbol, date_val)
-        written = store.write(day_df, path)
-        total += written
+        before_rows = store.count_rows(path) if path.exists() else 0
+        store.write(day_df, path)
+        after_rows = store.count_rows(path)
+        net_new_rows = max(after_rows - before_rows, 0)
+        total += net_new_rows
+
+        if checkpoint_db is not None:
+            checkpoint_db.register_file(
+                str(path),
+                broker_id,
+                symbol,
+                "ticks",
+                date_val.isoformat(),
+                after_rows,
+                path.stat().st_size if path.exists() else 0,
+            )
 
     return total
 

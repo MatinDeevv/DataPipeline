@@ -68,6 +68,8 @@ class BackfillEngine:
         symbol: str,
         start: dt.datetime,
         end: dt.datetime,
+        *,
+        respect_checkpoint: bool = True,
     ) -> int:
         """Backfill ticks in time chunks. Resumable via checkpoint."""
         broker_id = self._conn.broker_id
@@ -76,7 +78,9 @@ class BackfillEngine:
 
         # Resume from checkpoint
         cp = self._db.get_checkpoint(broker_id, symbol, "ticks")
-        if cp and cp.last_timestamp_utc > start:
+        checkpoint_last_timestamp = cp.last_timestamp_utc if cp else start
+        checkpoint_last_msc = cp.last_time_msc if cp else 0
+        if respect_checkpoint and cp and cp.last_timestamp_utc > start:
             log.info(
                 "backfill_ticks_resume",
                 broker=broker_id,
@@ -118,7 +122,14 @@ class BackfillEngine:
                         break
                 else:
                     empty_chunks = 0
-                    rows_written = store_ticks_by_date(df, broker_id, symbol, self._paths, self._store)
+                    rows_written = store_ticks_by_date(
+                        df,
+                        broker_id,
+                        symbol,
+                        self._paths,
+                        self._store,
+                        self._db,
+                    )
                     total_rows += rows_written
 
                     # Get the last timestamp from the chunk
@@ -128,8 +139,8 @@ class BackfillEngine:
                         broker_id=broker_id,
                         symbol=symbol,
                         data_type="ticks",
-                        last_timestamp_utc=chunk_to,
-                        last_time_msc=last_msc,
+                        last_timestamp_utc=max(checkpoint_last_timestamp, chunk_to),
+                        last_time_msc=max(checkpoint_last_msc, last_msc),
                         rows_ingested=total_rows,
                         updated_at=utc_now(),
                     ))
@@ -168,18 +179,16 @@ class BackfillEngine:
         broker_id = self._conn.broker_id
         day_start, day_end = _resolve_utc_day_bounds(date, hours_start_utc, hours_end_utc)
         cp = self._db.get_checkpoint(broker_id, symbol, "ticks")
-
         if cp and cp.last_timestamp_utc >= day_end:
             log.info(
-                "backfill_ticks_day_skip",
+                "backfill_ticks_day_gapfill",
                 broker=broker_id,
                 symbol=symbol,
                 date=date.isoformat(),
-                reason="checkpoint_at_or_after_window_end",
+                checkpoint_ts=cp.last_timestamp_utc.isoformat(),
             )
-            return cp.rows_ingested
 
-        return self.backfill_ticks(symbol, day_start, day_end)
+        return self.backfill_ticks(symbol, day_start, day_end, respect_checkpoint=False)
 
     def backfill_bars(
         self,

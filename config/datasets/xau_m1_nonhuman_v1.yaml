@@ -1,11 +1,11 @@
 schema_version: "1.0.0"
 dataset_name: "xau_m1_nonhuman"
 version: "1.0.0"
-description: "Phase 4 machine-native XAUUSD M1 dataset over a wider synchronized range, built from stable public selectors only."
+description: "Machine-native XAUUSD M1 production dataset over the synchronized dual-broker range, built from stable public selectors only."
 symbols:
   - "XAUUSD"
-date_from: "2024-02-26"
-date_to: "2024-03-01"
+date_from: "2026-03-30"
+date_to: "2026-04-02"
 base_clock: "M1"
 state_version_ref: "state.default@1.0.0"
 feature_selectors:
@@ -18,6 +18,12 @@ feature_selectors:
   - "entropy/*"
   - "multiscale/*"
 label_pack_ref: "core_tb_volscaled@1.0.0"
+required_raw_brokers:
+  - "broker_a"
+  - "broker_b"
+require_synchronized_raw_coverage: true
+require_dual_source_overlap: true
+min_dual_source_ratio: 0.10
 filters:
   - "exclude:filled_rows"
 split_policy: "temporal_holdout"
@@ -28,6 +34,6 @@ embargo_rows: 240
 truth_policy_ref: "truth.default@1.0.0"
 publish_on_accept: true
 tags:
-  - "phase4-checkpoint"
+  - "phase5-hardened"
   - "xau"
   - "nonhuman"

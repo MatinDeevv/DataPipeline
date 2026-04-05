@@ -89,10 +89,7 @@ class LabelService:
             logical_name=label_pack.key,
             logical_version=label_pack.version,
             artifact_uri=str(
-                self._paths.root
-                / "label_views"
-                / f"label_pack={label_pack.key}"
-                / f"clock={label_pack.base_clock}"
+                self._paths.label_artifact_root(label_pack.key, label_pack.base_clock, artifact_id)
             ),
             content_hash=content_hash,
             build_id=build_id,
@@ -122,7 +119,7 @@ class LabelService:
             },
         )
 
-        self._write_label_partitions(label_pack, label_df)
+        self._write_label_partitions(label_pack, artifact_id, label_df)
         manifest_path = write_manifest_sidecar(manifest, self._paths)
         self._catalog.register_artifact(manifest, str(manifest_path))
         return LabelMaterializationResult(
@@ -171,11 +168,15 @@ class LabelService:
             current += dt.timedelta(days=1)
         return sorted(set(refs))
 
-    def _write_label_partitions(self, label_pack: LabelPack, label_df: pl.DataFrame) -> None:
+    def _write_label_partitions(self, label_pack: LabelPack, artifact_id: str, label_df: pl.DataFrame) -> None:
         dated = label_df.with_columns(pl.col("time_utc").dt.date().alias("_date"))
         for date_val in dated["_date"].unique().sort().to_list():
             day_df = dated.filter(pl.col("_date") == date_val).drop("_date")
             self._store.write(day_df, self._paths.label_view_file(label_pack.key, label_pack.base_clock, date_val))
+            self._store.write(
+                day_df,
+                self._paths.label_artifact_file(label_pack.key, label_pack.base_clock, artifact_id, date_val),
+            )
 
 
 def _label_manifest_diagnostics(label_df: pl.DataFrame, label_pack: LabelPack) -> dict[str, Any]:

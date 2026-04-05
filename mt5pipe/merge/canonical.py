@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import shutil
 from dataclasses import dataclass
 
 import polars as pl
@@ -390,7 +391,10 @@ def _write_day_diagnostics(
             **diag,
         }
     ])
-    store.write_new(diag_df, paths.merge_diagnostics_file(symbol, date))
+    diagnostics_dir = paths.merge_diagnostics_dir(symbol, date)
+    if diagnostics_dir.exists():
+        shutil.rmtree(diagnostics_dir)
+    store.write(diag_df, paths.merge_diagnostics_file(symbol, date))
 
 
 def _best_quote_in_bucket(df: pl.DataFrame | None, broker_id: str) -> _BrokerQuote | None:

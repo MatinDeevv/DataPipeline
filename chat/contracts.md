@@ -417,3 +417,45 @@ impact: training/evaluation runs are reproducible, inspectable, and lineage-link
 docs_updated: yes
 notes: training still hard-gates on dataset trust acceptance and currently ships one deterministic baseline model family, gaussian_nb_binary@1.0.0
 ```
+
+### [2026-04-05 15:31]
+
+```
+agent: agent_3
+type: contract-change
+module: mt5pipe.compiler.models, mt5pipe.truth.service, config/datasets/xau_m1_core_v1.yaml, config/datasets/xau_m1_nonhuman_v1.yaml
+symbol: DatasetSpec.required_raw_brokers, require_synchronized_raw_coverage, require_dual_source_overlap, min_dual_source_ratio; source_quality trust enforcement
+old: dataset specs could describe the current ML path without explicitly declaring raw-broker requirements, and truth could still accept/publish a single-source dataset even when the intended research path depended on synchronized multi-broker quality
+new: dataset specs can now declare required raw brokers, synchronized raw coverage, dual-source overlap, and a minimum effective dual-source ratio; truth treats those as hard publication requirements and reports missing/asymmetric raw dates plus dual-source failures directly in source_quality metrics/reasons
+impact: compiler-owned ML specs can now prove and enforce that the production dataset window is genuinely dual-broker rather than merely trusting merge artifacts opportunistically
+docs_updated: yes
+notes: current production specs moved to the synchronized live slice 2026-03-30..2026-04-02 and require broker_a + broker_b with min_dual_source_ratio=0.10
+```
+
+### [2026-04-05 15:31]
+
+```
+agent: agent_3
+type: contract-change
+module: mt5pipe.storage.paths, mt5pipe.state.service, mt5pipe.features.service, mt5pipe.labels.service, mt5pipe.state.public, mt5pipe.features.public, mt5pipe.labels.public
+symbol: immutable upstream artifact_uri / artifact-scoped parquet roots for state, feature_view, label_view
+old: state, feature, and label manifests pointed at mutable logical roots, so upstream lineage was logically named but not content-addressed enough for reproducible reloads after reruns
+new: manifests now point at compact artifact-scoped parquet roots keyed by artifact id/version, writers mirror outputs into those immutable roots, and public loaders prefer artifact-scoped partitions before falling back to legacy logical roots
+impact: dataset manifests and downstream training artifacts now anchor lineage to stable upstream parquet snapshots without breaking existing logical-resolution flows
+docs_updated: yes
+notes: legacy logical roots are still written for compatibility; new loaders resolve immutable roots whenever artifact_id is available
+```
+
+### [2026-04-05 15:31]
+
+```
+agent: agent_3
+type: contract-change
+module: mt5pipe.ingestion.ticks, mt5pipe.backfill.engine, mt5pipe.merge.canonical, mt5pipe.quality.merge_qa
+symbol: raw ingest row accounting, gap-fill behavior, canonical per-day diagnostics canonicalization
+old: raw tick ingest totals reflected post-write file sizes rather than net-new deduped rows, historical day gap fills could be skipped when checkpoints were already ahead, and merge diagnostics/QA could accumulate duplicate per-day files across reruns
+new: tick storage returns net-new rows added after dedup and registers written partitions in the file manifest; day-level backfill gap fills run even when checkpoints are ahead while preserving monotonic checkpoints; merge diagnostics and merge QA now rewrite one canonical summary file per day on rerun
+impact: raw completeness claims, rerun idempotence, and daily merge observability are now auditable from actual stored artifacts instead of inflated counters or duplicated summaries
+docs_updated: yes
+notes: canonical tick parquet dedup now also keys on ts_msc/ts_utc/bar_start/anchor_ts_utc where present to prevent append-style rerun duplication
+```

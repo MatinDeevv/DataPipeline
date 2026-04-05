@@ -261,15 +261,26 @@ def _quality_family_summary(result: Any) -> dict[str, Any]:
 def _source_quality_metrics(result: Any) -> dict[str, Any]:
     metrics = _as_dict(_first_present(result, "trust_report.metrics.source_quality", default={}))
     keys = [
+        "required_raw_brokers",
+        "required_raw_missing_dates",
+        "required_raw_asymmetric_dates",
         "merge_observability_source",
         "merge_qa_days",
         "merge_diagnostics_days",
+        "effective_observability_days",
         "state_quality_mean",
         "state_filled_ratio",
         "dual_source_ratio_mean",
+        "effective_dual_source_ratio_mean",
         "diagnostic_dual_source_ratio_mean",
         "merge_conflict_mean",
         "diagnostic_conflict_mean",
+        "effective_conflict_mean",
+        "synchronized_raw_days",
+        "synchronized_raw_coverage_ratio",
+        "dual_source_days",
+        "bucket_both_total",
+        "canonical_dual_rows_total",
     ]
     return {
         key: metrics[key]

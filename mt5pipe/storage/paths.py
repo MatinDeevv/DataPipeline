@@ -135,11 +135,42 @@ class StoragePaths:
             / f"state_version={state_version}"
         )
 
+    def state_artifact_root(self, symbol: str, clock: str, state_version: str, artifact_id: str) -> Path:
+        return (
+            self.root
+            / "sa"
+            / f"s={symbol}"
+            / f"c={clock}"
+            / f"v={self._compact_name(state_version, prefix_len=8)}"
+            / f"a={self._compact_name(artifact_id, prefix_len=8)}"
+        )
+
     def state_dir(self, symbol: str, clock: str, date: dt.date, state_version: str) -> Path:
         return self.state_root(symbol, clock, state_version) / f"date={date.isoformat()}"
 
+    def state_artifact_dir(
+        self,
+        symbol: str,
+        clock: str,
+        date: dt.date,
+        state_version: str,
+        artifact_id: str,
+    ) -> Path:
+        return self.state_artifact_root(symbol, clock, state_version, artifact_id) / f"date={date.isoformat()}"
+
     def state_file(self, symbol: str, clock: str, date: dt.date, state_version: str, part: int = 0) -> Path:
         return self.state_dir(symbol, clock, date, state_version) / f"part-{part:05d}.parquet"
+
+    def state_artifact_file(
+        self,
+        symbol: str,
+        clock: str,
+        date: dt.date,
+        state_version: str,
+        artifact_id: str,
+        part: int = 0,
+    ) -> Path:
+        return self.state_artifact_dir(symbol, clock, date, state_version, artifact_id) / f"part-{part:05d}.parquet"
 
     # --- Rolling state windows ---
     def state_window_root(self, symbol: str, clock: str, state_version: str, window_size: str) -> Path:
@@ -152,6 +183,24 @@ class StoragePaths:
             / f"window={window_size}"
         )
 
+    def state_window_artifact_root(
+        self,
+        symbol: str,
+        clock: str,
+        state_version: str,
+        window_size: str,
+        artifact_id: str,
+    ) -> Path:
+        return (
+            self.root
+            / "swa"
+            / f"s={symbol}"
+            / f"c={clock}"
+            / f"v={self._compact_name(state_version, prefix_len=8)}"
+            / f"w={window_size}"
+            / f"a={self._compact_name(artifact_id, prefix_len=8)}"
+        )
+
     def state_window_dir(
         self,
         symbol: str,
@@ -161,6 +210,23 @@ class StoragePaths:
         window_size: str,
     ) -> Path:
         return self.state_window_root(symbol, clock, state_version, window_size) / f"date={date.isoformat()}"
+
+    def state_window_artifact_dir(
+        self,
+        symbol: str,
+        clock: str,
+        date: dt.date,
+        state_version: str,
+        window_size: str,
+        artifact_id: str,
+    ) -> Path:
+        return self.state_window_artifact_root(
+            symbol,
+            clock,
+            state_version,
+            window_size,
+            artifact_id,
+        ) / f"date={date.isoformat()}"
 
     def state_window_file(
         self,
@@ -173,6 +239,25 @@ class StoragePaths:
     ) -> Path:
         return self.state_window_dir(symbol, clock, date, state_version, window_size) / f"part-{part:05d}.parquet"
 
+    def state_window_artifact_file(
+        self,
+        symbol: str,
+        clock: str,
+        date: dt.date,
+        state_version: str,
+        window_size: str,
+        artifact_id: str,
+        part: int = 0,
+    ) -> Path:
+        return self.state_window_artifact_dir(
+            symbol,
+            clock,
+            date,
+            state_version,
+            window_size,
+            artifact_id,
+        ) / f"part-{part:05d}.parquet"
+
     # --- Feature views ---
     def feature_view_dir(self, feature_key: str, clock: str, date: dt.date) -> Path:
         return (
@@ -183,8 +268,30 @@ class StoragePaths:
             / f"date={date.isoformat()}"
         )
 
+    def feature_artifact_root(self, feature_key: str, clock: str, artifact_id: str) -> Path:
+        return (
+            self.root
+            / "fva"
+            / f"f={self._compact_name(feature_key, prefix_len=8)}"
+            / f"c={clock}"
+            / f"a={self._compact_name(artifact_id, prefix_len=8)}"
+        )
+
+    def feature_artifact_dir(self, feature_key: str, clock: str, artifact_id: str, date: dt.date) -> Path:
+        return self.feature_artifact_root(feature_key, clock, artifact_id) / f"date={date.isoformat()}"
+
     def feature_view_file(self, feature_key: str, clock: str, date: dt.date, part: int = 0) -> Path:
         return self.feature_view_dir(feature_key, clock, date) / f"part-{part:05d}.parquet"
+
+    def feature_artifact_file(
+        self,
+        feature_key: str,
+        clock: str,
+        artifact_id: str,
+        date: dt.date,
+        part: int = 0,
+    ) -> Path:
+        return self.feature_artifact_dir(feature_key, clock, artifact_id, date) / f"part-{part:05d}.parquet"
 
     # --- Label views ---
     def label_view_dir(self, label_pack_key: str, clock: str, date: dt.date) -> Path:
@@ -196,8 +303,30 @@ class StoragePaths:
             / f"date={date.isoformat()}"
         )
 
+    def label_artifact_root(self, label_pack_key: str, clock: str, artifact_id: str) -> Path:
+        return (
+            self.root
+            / "lva"
+            / f"l={self._compact_name(label_pack_key, prefix_len=8)}"
+            / f"c={clock}"
+            / f"a={self._compact_name(artifact_id, prefix_len=8)}"
+        )
+
+    def label_artifact_dir(self, label_pack_key: str, clock: str, artifact_id: str, date: dt.date) -> Path:
+        return self.label_artifact_root(label_pack_key, clock, artifact_id) / f"date={date.isoformat()}"
+
     def label_view_file(self, label_pack_key: str, clock: str, date: dt.date, part: int = 0) -> Path:
         return self.label_view_dir(label_pack_key, clock, date) / f"part-{part:05d}.parquet"
+
+    def label_artifact_file(
+        self,
+        label_pack_key: str,
+        clock: str,
+        artifact_id: str,
+        date: dt.date,
+        part: int = 0,
+    ) -> Path:
+        return self.label_artifact_dir(label_pack_key, clock, artifact_id, date) / f"part-{part:05d}.parquet"
 
     # --- Built bars ---
     def built_bars_dir(self, symbol: str, timeframe: str, date: dt.date) -> Path:

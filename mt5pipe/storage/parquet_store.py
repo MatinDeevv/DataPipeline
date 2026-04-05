@@ -65,7 +65,7 @@ class ParquetStore:
                 df = pl.concat([existing, df], how="diagonal_relaxed")
                 # Deduplicate: prefer newer rows when time columns overlap
                 dedup_cols = []
-                for candidate in ["time_msc", "time_utc", "bar_start"]:
+                for candidate in ["time_msc", "ts_msc", "time_utc", "ts_utc", "bar_start", "anchor_ts_utc"]:
                     if candidate in df.columns:
                         dedup_cols.append(candidate)
                         break

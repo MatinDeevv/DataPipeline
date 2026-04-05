@@ -206,3 +206,13 @@ The existing codebase has direct cross-sector imports that predate this boundary
 - Expected sparse nulls, such as HTF alignment sparsity or declared warmup sparsity, remain visible in `TrustReport.metrics.quality_caveat_summary.accepted_caveats` and in CLI `quality_caveats` / `quality_family_summary` output, but they do not create warning reasons by themselves.
 - Slice-trivial constants that are expected for a synchronized slice remain visible as accepted caveats. Only blocking constant columns stay in the warning path.
 - Source-quality reporting may fall back to `merge_diagnostics` when formal `merge_qa` artifacts are absent. `inspect-dataset` and `diff-dataset` surface this deterministically through `source_quality_metrics`.
+
+---
+
+## Phase 5 Hardening Notes
+
+- Production `DatasetSpec` files can now declare `required_raw_brokers`, `require_synchronized_raw_coverage`, `require_dual_source_overlap`, and `min_dual_source_ratio`. These are compiler-owned spec expectations and are enforced by truth as hard publication requirements.
+- The current production ML specs, [config/datasets/xau_m1_core_v1.yaml](/C:/Users/marti/Downloads/Datapipe/config/datasets/xau_m1_core_v1.yaml) and [config/datasets/xau_m1_nonhuman_v1.yaml](/C:/Users/marti/Downloads/Datapipe/config/datasets/xau_m1_nonhuman_v1.yaml), now target the verified synchronized live slice `2026-03-30` through `2026-04-02`.
+- Raw tick ingest accounting now reports net-new rows added after dedup rather than the final row count of rewritten parquet partitions. Rerunning a synchronized backfill over a complete slice should show `rows_added=0`.
+- State, feature, and label manifests now point at compact artifact-scoped parquet roots keyed by artifact id/version. Public loaders prefer those immutable roots when an artifact id is available, then fall back to legacy logical roots for compatibility.
+- Canonical merge diagnostics and daily merge QA rewrite one canonical file per date on rerun. Downstream source-quality summaries should therefore see one authoritative daily row rather than duplicate rerun artifacts.

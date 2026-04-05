@@ -191,3 +191,38 @@ needs: Phase 5 is stable for one baseline model path only. Future phases should 
 files: mt5pipe/compiler/models.py, mt5pipe/compiler/manifest.py, mt5pipe/compiler/public.py, mt5pipe/compiler/training.py, mt5pipe/catalog/models.py, mt5pipe/catalog/sqlite.py, mt5pipe/storage/paths.py, mt5pipe/cli/train_cmds.py, mt5pipe/cli/app.py, config/experiments/xau_m1_nonhuman_direction_nb_v1.yaml, tests/test_training_flow.py, docs/parallel_dev_architecture.md, chat/contracts.md, chat/coordination.md
 verification: pytest tests/test_training_flow.py tests/test_compiler.py tests/test_catalog.py tests/test_dataset_cli_compat.py tests/test_boundary_imports.py -q -> 21 passed, 1 xfailed; python -m mt5pipe.cli.app dataset inspect-dataset --artifact dataset://xau_m1_nonhuman@1.0.0 -> accepted trusted dataset artifact 97.72; python -m mt5pipe.cli.app train run-experiment --spec config/experiments/xau_m1_nonhuman_direction_nb_v1.yaml -> experiment.xau_m1_nonhuman_direction_nb.402c9aa8664d accepted, model.xau_m1_nonhuman_direction_nb.710a3e456ec2 accepted, walk_forward_balanced_accuracy_mean=0.5354, holdout_balanced_accuracy=0.5096; inspect-experiment / inspect-model by alias returned linked dataset/model/run summaries successfully
 ```
+
+### [2026-04-05 14:45:50 -04:00] agent_3 - final hardening start
+
+feedback_read: yes
+feedback_source: feedbacks/latest.md
+feedback_summary: Phase 3/4/5 feedback still points to the same discipline: no architecture churn, stricter trust, wider synchronized coverage, and artifact lineage you can actually audit. This pass is focused on closing the remaining proof gaps rather than expanding capability.
+phase: Phase 5 hardening
+area: compiler|truth|catalog|cli|training
+
+```
+agent: agent_3
+type: update
+area: compiler/truth/catalog/cli/training
+summary: Starting the final end-to-end hardening pass to turn the pipeline claim from yellow to green. I am fixing synchronized dual-broker production coverage, making truth enforce multi-broker requirements, tightening raw ingest accounting, hardening upstream artifact identity, and deduplicating merge diagnostics before re-running the live dataset and training path.
+needs: Will preserve the current research/training workflow and stay on public boundaries only; any public compiler/truth/catalog/CLI behavior changes will be logged in contracts/docs immediately.
+files: feedbacks/latest.md, chat/contracts.md, chat/coordination.md, chat/agent_3.md, mt5pipe/state/public.py, mt5pipe/features/public.py, mt5pipe/labels/public.py, mt5pipe/compiler/public.py
+```
+
+### [2026-04-05 15:31:12 -04:00] agent_3 - final hardening complete
+
+feedback_read: yes
+feedback_source: feedbacks/latest.md
+feedback_summary: The last pass should close proof gaps, not add scope: enforce synchronized dual-broker requirements, make raw accounting auditable, make upstream artifact lineage reproducible, and prove the current production path live.
+phase: Phase 5 hardening
+area: compiler|truth|catalog|cli|training
+
+```
+agent: agent_3
+type: completion
+area: compiler/truth/catalog/cli/training
+summary: Fixed the remaining end-to-end proof gaps and re-ran the live production path on a synchronized dual-broker slice. Production DatasetSpecs now declare required brokers + synchronized overlap requirements, truth rejects/publishes accordingly, raw tick reruns report net-new rows_added=0, state/feature/label manifests resolve immutable artifact-scoped parquet roots, merge diagnostics/QA stay one-file-per-day on rerun, and the rebuilt xau_m1_nonhuman_v1 artifact compiles, inspects, diffs, and feeds the training path successfully.
+needs: The strong claim is now green for the defined production slice 2026-03-30..2026-04-02. The main operational caveat is scope, not correctness: future production ranges must still be synchronized/backfilled on both brokers before these source requirements will pass.
+files: mt5pipe/compiler/models.py, mt5pipe/truth/service.py, mt5pipe/cli/dataset_cmds.py, mt5pipe/ingestion/ticks.py, mt5pipe/backfill/engine.py, mt5pipe/storage/parquet_store.py, mt5pipe/storage/paths.py, mt5pipe/state/service.py, mt5pipe/features/service.py, mt5pipe/features/artifacts.py, mt5pipe/labels/service.py, mt5pipe/labels/artifacts.py, mt5pipe/merge/canonical.py, mt5pipe/quality/merge_qa.py, config/datasets/xau_m1_core_v1.yaml, config/datasets/xau_m1_nonhuman_v1.yaml, tests/test_checkpoint.py, tests/test_canonical_merge.py, tests/test_truth_core.py, tests/test_artifact_lineage.py, tests/test_compiler.py, tests/test_training_flow.py
+verification: pytest tests/test_checkpoint.py tests/test_canonical_merge.py tests/test_merge_qa.py tests/test_truth_core.py tests/test_artifact_lineage.py tests/test_compiler.py tests/test_dataset_cli_compat.py tests/test_training_flow.py tests/test_catalog.py tests/test_boundary_imports.py -q -> 57 passed, 1 xfailed; python -m mt5pipe.cli.app backfill sync-ticks --broker-a broker_a --broker-b broker_b --symbol XAUUSD --from 2026-03-30 --to 2026-04-03 -> rows_added=0 on rerun with ticks_in_range 747,476 / 784,562; python -m mt5pipe.cli.app merge canonical --symbol XAUUSD --broker-a broker_a --broker-b broker_b --from 2026-03-30 --to 2026-04-02 -> canonical_dual_rows=215,777 dual_source_ratio=0.1639; python -m mt5pipe.cli.app dataset compile-dataset --spec config/datasets/xau_m1_nonhuman_v1.yaml --publish -> dataset.xau_m1_nonhuman.219cc1cdb344 published accepted 98.11; python -m mt5pipe.cli.app train run-experiment --spec config/experiments/xau_m1_nonhuman_direction_nb_v1.yaml -> experiment.xau_m1_nonhuman_direction_nb.b859ed294f94 and model.xau_m1_nonhuman_direction_nb.5f192c5412f2 linked to the trusted dataset alias
+```

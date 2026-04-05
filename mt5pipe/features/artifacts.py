@@ -28,6 +28,16 @@ def load_feature_artifact(
     date_to: dt.date | None = None,
 ) -> pl.DataFrame:
     """Load a persisted feature view by registry key and clock."""
+    if ref.artifact_id:
+        artifact_root = paths.feature_artifact_root(ref.feature_key, ref.clock, ref.artifact_id)
+        artifact_frame = store.read_dir(artifact_root)
+        if not artifact_frame.is_empty():
+            if date_from is None or date_to is None:
+                return artifact_frame.sort("time_utc")
+            return artifact_frame.filter(
+                pl.col("time_utc").dt.date().is_between(date_from, date_to)
+            ).sort("time_utc")
+
     if date_from is None or date_to is None:
         return store.read_dir(paths.root / "feature_views" / f"feature={ref.feature_key}" / f"clock={ref.clock}")
 

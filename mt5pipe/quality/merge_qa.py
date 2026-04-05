@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import shutil
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -208,6 +209,9 @@ def assert_synchronized_raw_tick_coverage(
 def _latest_row(df: pl.DataFrame) -> dict[str, Any] | None:
     if df.is_empty():
         return None
+    sort_columns = [column for column in ["time_utc", "date"] if column in df.columns]
+    if sort_columns:
+        df = df.sort(sort_columns)
     return df.tail(1).row(0, named=True)
 
 
@@ -387,6 +391,9 @@ def write_daily_merge_qa_report(
     for date_str in report_df["date"].unique().sort().to_list():
         date = dt.date.fromisoformat(date_str)
         day_df = report_df.filter(pl.col("date") == date_str)
+        day_dir = paths.merge_qa_dir(symbol, date)
+        if day_dir.exists():
+            shutil.rmtree(day_dir)
         total_written += store.write(day_df, paths.merge_qa_file(symbol, date))
     return total_written
 

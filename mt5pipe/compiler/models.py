@@ -29,6 +29,10 @@ class DatasetSpec(BaseModel):
     feature_artifact_refs: list[str] = Field(default_factory=list)
     label_pack_ref: str | None = None
     label_artifact_ref: str | None = None
+    required_raw_brokers: list[str] = Field(default_factory=list)
+    require_synchronized_raw_coverage: bool = False
+    require_dual_source_overlap: bool = False
+    min_dual_source_ratio: float = 0.0
     filters: list[str] = Field(default_factory=list)
     split_policy: Literal["temporal_holdout", "walk_forward"]
     train_ratio: float = 0.70
@@ -58,6 +62,15 @@ class DatasetSpec(BaseModel):
             raise ValueError("either label_pack_ref or label_artifact_ref is required")
         if self.embargo_rows <= 0:
             raise ValueError("embargo_rows must be > 0")
+        self.required_raw_brokers = sorted({broker.strip() for broker in self.required_raw_brokers if broker.strip()})
+        if self.min_dual_source_ratio < 0.0 or self.min_dual_source_ratio > 1.0:
+            raise ValueError("min_dual_source_ratio must be within [0, 1]")
+        if (self.require_synchronized_raw_coverage or self.require_dual_source_overlap) and not self.required_raw_brokers:
+            raise ValueError(
+                "required_raw_brokers must be provided when synchronized coverage or dual-source overlap is required"
+            )
+        if self.require_dual_source_overlap and len(self.required_raw_brokers) < 2:
+            raise ValueError("require_dual_source_overlap requires at least two required_raw_brokers")
         if self.split_policy == "temporal_holdout":
             total = self.train_ratio + self.val_ratio + self.test_ratio
             if abs(total - 1.0) > 1e-9:

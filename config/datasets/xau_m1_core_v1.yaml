@@ -1,11 +1,11 @@
 schema_version: "1.0.0"
 dataset_name: "xau_m1_core"
 version: "1.0.0"
-description: "Compiler-backed XAUUSD M1 core dataset over a wider synchronized range with stable core features and labels"
+description: "Compiler-backed XAUUSD M1 core dataset over the synchronized dual-broker production range with stable core features and labels"
 symbols:
   - "XAUUSD"
-date_from: "2024-02-26"
-date_to: "2024-03-01"
+date_from: "2026-03-30"
+date_to: "2026-04-02"
 base_clock: "M1"
 state_version_ref: "state.default@1.0.0"
 feature_selectors:
@@ -14,6 +14,12 @@ feature_selectors:
   - "quality/*"
   - "htf_context/*"
 label_pack_ref: "core_tb_volscaled@1.0.0"
+required_raw_brokers:
+  - "broker_a"
+  - "broker_b"
+require_synchronized_raw_coverage: true
+require_dual_source_overlap: true
+min_dual_source_ratio: 0.10
 filters:
   - "exclude:filled_rows"
 split_policy: "temporal_holdout"
@@ -24,6 +30,6 @@ embargo_rows: 240
 truth_policy_ref: "truth.default@1.0.0"
 publish_on_accept: true
 tags:
-  - "phase4-ready"
+  - "phase5-hardened"
   - "xau"
   - "core"

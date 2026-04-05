@@ -208,7 +208,12 @@ class StateService:
         frames: list[pl.DataFrame] = []
         current = ref.date_from
         while current <= ref.date_to:
-            day = self._store.read_dir(self._paths.state_dir(ref.symbol, ref.clock, current, ref.state_version))
+            day = self._load_first_available_dir(
+                [
+                    self._paths.state_artifact_dir(ref.symbol, ref.clock, current, ref.state_version, ref.artifact_id),
+                    self._paths.state_dir(ref.symbol, ref.clock, current, ref.state_version),
+                ]
+            )
             if not day.is_empty():
                 frames.append(day)
             current += dt.timedelta(days=1)
@@ -353,7 +358,13 @@ class StateService:
                 logical_name=logical_name,
                 logical_version=request.state_version,
                 artifact_uri=str(
-                    self._paths.state_window_root(request.symbol, clock, request.state_version, window_size)
+                    self._paths.state_window_artifact_root(
+                        request.symbol,
+                        clock,
+                        request.state_version,
+                        window_size,
+                        artifact_id,
+                    )
                 ),
                 content_hash=content_hash,
                 build_id=resolved_build_id,
@@ -388,7 +399,14 @@ class StateService:
                     "session_readiness_rollups": [rollup.model_dump(mode="json") for rollup in session_readiness_rollups],
                 },
             )
-            self._write_state_window_partitions(request.symbol, clock, request.state_version, window_size, window_df)
+            self._write_state_window_partitions(
+                request.symbol,
+                clock,
+                request.state_version,
+                window_size,
+                artifact_id,
+                window_df,
+            )
             manifest_path = write_state_manifest(manifest, self._paths)
             self._register_manifest(manifest, manifest_path)
             results[window_size] = StateWindowMaterializationResult(
@@ -410,8 +428,18 @@ class StateService:
         frames: list[pl.DataFrame] = []
         current = ref.date_from
         while current <= ref.date_to:
-            day = self._store.read_dir(
-                self._paths.state_window_dir(ref.symbol, ref.clock, current, ref.state_version, ref.window_size)
+            day = self._load_first_available_dir(
+                [
+                    self._paths.state_window_artifact_dir(
+                        ref.symbol,
+                        ref.clock,
+                        current,
+                        ref.state_version,
+                        ref.window_size,
+                        ref.artifact_id,
+                    ),
+                    self._paths.state_window_dir(ref.symbol, ref.clock, current, ref.state_version, ref.window_size),
+                ]
             )
             if not day.is_empty():
                 frames.append(day)
@@ -481,7 +509,7 @@ class StateService:
             logical_name=logical_name,
             logical_version=state_version_ref,
             artifact_uri=str(
-                self._paths.state_root(symbol, clock, state_version_ref)
+                self._paths.state_artifact_root(symbol, clock, state_version_ref, artifact_id)
             ),
             content_hash=content_hash,
             build_id=build_id,
@@ -514,7 +542,7 @@ class StateService:
             },
         )
 
-        self._write_state_partitions(symbol, clock, state_version_ref, state_df)
+        self._write_state_partitions(symbol, clock, state_version_ref, artifact_id, state_df)
         manifest_path = write_state_manifest(manifest, self._paths)
         self._register_manifest(manifest, manifest_path)
         return StateMaterializationResult(
@@ -814,12 +842,26 @@ class StateService:
             refs.append(str(merge_qa_dir))
         return refs
 
-    def _write_state_partitions(self, symbol: str, clock: str, state_version_ref: str, state_df: pl.DataFrame) -> None:
+    def _write_state_partitions(
+        self,
+        symbol: str,
+        clock: str,
+        state_version_ref: str,
+        artifact_id: str,
+        state_df: pl.DataFrame,
+    ) -> None:
         dated = state_df.with_columns(pl.col("ts_utc").dt.date().alias("_date"))
         for date_val in dated["_date"].unique().sort().to_list():
             day_df = dated.filter(pl.col("_date") == date_val).drop("_date")
             self._reset_partition_dir(self._paths.state_dir(symbol, clock, date_val, state_version_ref))
+            self._reset_partition_dir(
+                self._paths.state_artifact_dir(symbol, clock, date_val, state_version_ref, artifact_id)
+            )
             self._store.write(day_df, self._paths.state_file(symbol, clock, date_val, state_version_ref))
+            self._store.write(
+                day_df,
+                self._paths.state_artifact_file(symbol, clock, date_val, state_version_ref, artifact_id),
+            )
 
     def _write_state_window_partitions(
         self,
@@ -827,6 +869,7 @@ class StateService:
         clock: str,
         state_version: str,
         window_size: str,
+        artifact_id: str,
         window_df: pl.DataFrame,
     ) -> None:
         if window_df.is_empty():
@@ -835,15 +878,43 @@ class StateService:
         for date_val in dated["_date"].unique().sort().to_list():
             day_df = dated.filter(pl.col("_date") == date_val).drop("_date")
             self._reset_partition_dir(self._paths.state_window_dir(symbol, clock, date_val, state_version, window_size))
+            self._reset_partition_dir(
+                self._paths.state_window_artifact_dir(
+                    symbol,
+                    clock,
+                    date_val,
+                    state_version,
+                    window_size,
+                    artifact_id,
+                )
+            )
             self._store.write(
                 day_df,
                 self._paths.state_window_file(symbol, clock, date_val, state_version, window_size),
+            )
+            self._store.write(
+                day_df,
+                self._paths.state_window_artifact_file(
+                    symbol,
+                    clock,
+                    date_val,
+                    state_version,
+                    window_size,
+                    artifact_id,
+                ),
             )
 
     @staticmethod
     def _reset_partition_dir(directory: Path) -> None:
         if directory.exists():
             shutil.rmtree(directory)
+
+    def _load_first_available_dir(self, directories: list[Path]) -> pl.DataFrame:
+        for directory in directories:
+            day = self._store.read_dir(directory)
+            if not day.is_empty():
+                return day
+        return pl.DataFrame()
 
     @staticmethod
     def _validate_request_date_range(
