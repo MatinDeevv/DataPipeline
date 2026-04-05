@@ -6,6 +6,7 @@ Cross-package imports are only allowed via:
 - `mt5pipe.contracts.*`
 - `mt5pipe.state.public`
 - `mt5pipe.features.public`
+- `mt5pipe.labels.public`
 - `mt5pipe.compiler.public`
 
 ---
@@ -36,6 +37,20 @@ new: Shared contract types for cross-sector communication
 impact: all agents
 docs_updated: yes
 notes: Initial shared contracts package. Types are placeholders — agents must finalize signatures.
+```
+
+### [2026-04-04] Setup agent — boundary cleanup pass
+
+```
+agent: setup
+type: contract-change
+module: mt5pipe.labels.public (new), mt5pipe.features.public, mt5pipe.state.__init__, mt5pipe.compiler.__init__, mt5pipe.features.__init__, mt5pipe.labels.__init__
+symbol: LabelPack, LabelService (added to features.public), all __init__ re-route through public.py
+old: __init__.py exported directly from models/service internals; labels had no public.py
+new: all sector __init__.py re-export from public.py only; labels.public.py added as intra-sector boundary; features.public.py re-exports labels surface for cross-sector consumers
+impact: all agents — no import paths changed externally, but __init__ now routes through public
+docs_updated: yes
+notes: Cleanup only. No implementation changes.
 ```
 
 ---

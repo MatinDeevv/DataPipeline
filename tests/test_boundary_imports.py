@@ -50,6 +50,7 @@ ALLOWED_CROSS_SECTOR: set[str] = {
     "mt5pipe.contracts",
     "mt5pipe.state.public",
     "mt5pipe.features.public",
+    "mt5pipe.labels.public",
     "mt5pipe.compiler.public",
 }
 
@@ -206,6 +207,7 @@ class TestBoundaryRules:
             "mt5pipe.contracts",
             "mt5pipe.state.public",
             "mt5pipe.features.public",
+            "mt5pipe.labels.public",
             "mt5pipe.compiler.public",
         ]:
             mod = importlib.import_module(mod_name)

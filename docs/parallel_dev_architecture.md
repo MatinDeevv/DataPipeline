@@ -63,8 +63,7 @@ These packages are **not** sector-gated. Any sector may import from them directl
 │                                              │
 │   Any module → mt5pipe.contracts.*           │
 │   Any module → mt5pipe.state.public          │
-│   Any module → mt5pipe.features.public       │
-│   Any module → mt5pipe.compiler.public       │
+│   Any module → mt5pipe.features.public       ││   Any module → mt5pipe.labels.public         │   Any module → mt5pipe.compiler.public       │
 │   Any module → neutral packages              │
 │   Intra-sector → anything within own sector  │
 │                                              │
@@ -81,13 +80,17 @@ These packages are **not** sector-gated. Any sector may import from them directl
 
 **Rule:** Cross-sector imports may ONLY target:
 1. `mt5pipe.contracts.*`
-2. `mt5pipe.<sector>.public`
+2. `mt5pipe.<sector>.public` (`state.public`, `features.public`, `labels.public`, `compiler.public`)
 
 This is enforced by `tests/test_boundary_imports.py`.
 
 ---
 
 ## Coordination System
+
+### `chat/agent_1.md`, `chat/agent_2.md`, `chat/agent_3.md`
+- **Purpose:** Per-agent work logs: ownership declaration, plans, in-progress updates
+- **Rule:** Each agent logs their own work here; other agents may read but not overwrite
 
 ### `chat/contracts.md`
 - **Purpose:** Log all public boundary changes (new exports, signature changes, schema changes)
@@ -126,6 +129,7 @@ mt5pipe/
 │   ├── registry/
 │   └── ...
 ├── labels/             ← Agent 2
+│   ├── public.py       ← BOUNDARY: LabelPack, LabelService
 │   └── ...
 ├── compiler/           ← Agent 3
 │   ├── __init__.py
