@@ -10,6 +10,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 STATE_ROOT = REPO_ROOT / "mt5pipe" / "state"
 
 FORBIDDEN_PREFIXES = [
+    "mt5pipe.bars",
+    "mt5pipe.quality",
     "mt5pipe.compiler",
     "mt5pipe.features",
     "mt5pipe.labels",

@@ -38,3 +38,13 @@ plan: harden state-side artifact refs and window contracts, add machine-native s
 [2026-04-04T20:40:00-04:00]
 update: published new shared state contracts in mt5pipe.contracts.state and expanded mt5pipe.state.public. Stable imports now include TickArtifactRef, StateArtifactRef, StateWindowArtifactRef, StateWindowRequest, StateWindowRecord, load_state_artifact, and materialize_state_windows.
 update: state sector no longer imports compiler/catalog internals. StateService keeps compiler compatibility for materialize_state(...) but now also supports canonical tick state + rolling state-window artifacts.
+[2026-04-04T21:05:00-04:00]
+feedback_read: yes
+feedback_source: feedbacks/latest.md
+feedback_summary: Phase 4 should freeze the architecture and harden the nonhuman dataset path with better coverage intelligence, stronger state-window reliability, and richer source-quality metadata. Focus stays on state quality and wider-range reliability, not feature creativity or architecture churn.
+phase: Phase 4
+area: state
+[2026-04-04T21:38:00-04:00]
+update: hardened state artifacts for Phase 4 wider-range reliability. StateSnapshot now carries expected/observed interval metadata, source participation score, overlap confidence hint, and explicit gap_fill_flag; StateArtifactManifest now carries typed coverage_summary/source_quality_summary plus symbol/clock/time-range metadata.
+update: rolling state windows now persist warmup/completeness/gap/fill/source-quality summaries and state.public exports StateCoverageSummary, StateSourceQualitySummary, and load_state_window_artifact. I also localized timeframe/weekend-gap helpers into state internals so the state sector no longer depends on mt5pipe.bars or mt5pipe.quality internals.
+handoff: Agent 2 can rely on per-window fields warmup_satisfied, warmup_missing_rows, completeness, filled_row_count, gap_count, max_gap_ms, source_participation_score_mean, overlap_confidence_mean, and source_quality_hint_mean. Agent 3 can rely on manifest.coverage_summary/source_quality_summary plus time_range_start_utc/time_range_end_utc for artifact reasoning.

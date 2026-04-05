@@ -69,3 +69,20 @@ summary: Implemented artifact-ref-aware compiler integration, Phase 3 truth gati
 needs: Real workspace execution of config/datasets/xau_m1_nonhuman_v1.yaml still depends on Agent 2 machine-native feature artifacts being present in the local catalog/worktree. The compiler path and tests are ready for that boundary through mt5pipe.features.public and artifact refs only.
 files: mt5pipe/compiler/public.py, mt5pipe/compiler/service.py, mt5pipe/truth/service.py, mt5pipe/cli/dataset_cmds.py, config/datasets/xau_m1_nonhuman_v1.yaml, config/datasets/xau_m1_core_v1.yaml, tests/test_compiler.py, tests/test_truth_core.py, tests/test_catalog.py, tests/test_dataset_cli_compat.py, docs/parallel_dev_architecture.md, chat/contracts.md, chat/coordination.md
 ```
+
+### [2026-04-04 21:23:51 -04:00] agent_3 - phase4 start
+
+feedback_read: yes
+feedback_source: feedbacks/latest.md
+feedback_summary: Phase 3 is accepted; Phase 4 should freeze architecture and harden the machine-native dataset path over wider synchronized ranges. Trust/reporting needs to become stricter and more useful without weakening publication gates.
+phase: Phase 4
+area: compiler|truth|catalog|cli
+
+```
+agent: agent_3
+type: update
+area: compiler/truth/catalog/cli
+summary: Starting Phase 4 hardening on the nonhuman dataset path with focus on wider-range compile reliability, stricter and clearer trust gating, reproducible artifact lifecycle behavior, and more useful inspect/diff research ergonomics.
+needs: Will stay on public boundaries only and log any public-surface drift in contracts/docs/spec examples immediately.
+files: feedbacks/latest.md, chat/contracts.md, chat/coordination.md, chat/agent_3.md, mt5pipe/state/public.py, mt5pipe/features/public.py, mt5pipe/labels/public.py, mt5pipe/compiler/public.py
+```

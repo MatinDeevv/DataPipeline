@@ -44,8 +44,13 @@ class TrustReport(BaseModel):
     label_quality_score: float
     source_quality_score: float
     lineage_score: float
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
     hard_failures: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    rejection_reasons: list[str] = Field(default_factory=list)
+    warning_reasons: list[str] = Field(default_factory=list)
+    check_status_counts: dict[str, int] = Field(default_factory=dict)
+    decision_summary: str = ""
     metrics: dict[str, Any] = Field(default_factory=dict)
     thresholds: dict[str, Any] = Field(default_factory=dict)
     generated_at: dt.datetime

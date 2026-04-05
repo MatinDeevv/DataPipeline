@@ -72,14 +72,33 @@ class TestTripleBarrier:
 
     def test_label_values(self, sample_bars: pl.DataFrame) -> None:
         result = add_triple_barrier_labels(sample_bars, [10])
-        valid_labels = result["triple_barrier_10m"].to_list()
+        valid_labels = result["triple_barrier_10m"].drop_nulls().to_list()
         for label in valid_labels:
             assert label in (-1, 0, 1)
 
     def test_mae_mfe_non_negative(self, sample_bars: pl.DataFrame) -> None:
         result = add_triple_barrier_labels(sample_bars, [10])
-        assert (result["mae_10m"] >= 0).all()
-        assert (result["mfe_10m"] >= 0).all()
+        assert (result["mae_10m"].drop_nulls() >= 0).all()
+        assert (result["mfe_10m"].drop_nulls() >= 0).all()
+
+    def test_tail_rows_are_null_when_horizon_is_unavailable(self, sample_bars: pl.DataFrame) -> None:
+        result = add_triple_barrier_labels(sample_bars, [10])
+        assert result["triple_barrier_10m"][-10:].is_null().all()
+        assert result["mae_10m"][-10:].is_null().all()
+        assert result["mfe_10m"][-10:].is_null().all()
+
+    def test_horizon_is_inclusive_of_the_last_forward_bar(self) -> None:
+        n = 8
+        base = dt.datetime(2024, 1, 15, 10, 0, 0, tzinfo=dt.timezone.utc)
+        frame = pl.DataFrame({
+            "time_utc": [base + dt.timedelta(minutes=i) for i in range(n)],
+            "open": [100.0] * n,
+            "high": [100.0, 100.0, 100.0, 100.0, 100.6, 100.0, 100.0, 100.0],
+            "low": [100.0] * n,
+            "close": [100.0] * n,
+        })
+        result = add_triple_barrier_labels(frame, [4], tp_bps=50.0, sl_bps=50.0)
+        assert result["triple_barrier_4m"][0] == 1
 
     def test_flat_prices_get_zero_label(self) -> None:
         n = 50
@@ -93,7 +112,9 @@ class TestTripleBarrier:
         })
         result = add_triple_barrier_labels(flat, [10], tp_bps=50.0, sl_bps=50.0)
         # Flat price should never hit barrier
-        assert (result["triple_barrier_10m"] == 0).all()
+        valid = result["triple_barrier_10m"].drop_nulls()
+        assert (valid == 0).all()
+        assert result["triple_barrier_10m"][-10:].is_null().all()
 
     def test_vol_scaled_barriers(self, sample_bars: pl.DataFrame) -> None:
         """Vol-scaled barriers should give more balanced labels than fixed wide barriers."""
@@ -103,7 +124,7 @@ class TestTripleBarrier:
             vol_scale_window=20, vol_multiplier=2.0,
         )
         # Both should produce valid label values
-        for label in vol["triple_barrier_5m"].to_list():
+        for label in vol["triple_barrier_5m"].drop_nulls().to_list():
             assert label in (-1, 0, 1)
         # Vol-scaled should use the fixed bps as floor, so results are at least
         # as tight as fixed barriers.
@@ -127,4 +148,6 @@ class TestTripleBarrier:
             vol_scale_window=20, vol_multiplier=2.0,
         )
         # Flat prices → vol ~ 0 → falls back to 50bps fixed, still can't hit barrier
-        assert (result["triple_barrier_10m"] == 0).all()
+        valid = result["triple_barrier_10m"].drop_nulls()
+        assert (valid == 0).all()
+        assert result["triple_barrier_10m"][-10:].is_null().all()

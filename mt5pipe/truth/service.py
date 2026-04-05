@@ -166,6 +166,39 @@ class TruthService:
             and lineage_score == 100.0
         )
         status = "accepted" if accepted else "rejected"
+        score_breakdown = {
+            "total": round(trust_score_total, 4),
+            "coverage": round(coverage_score, 4),
+            "leakage": round(leakage_score, 4),
+            "feature_quality": round(feature_quality_score, 4),
+            "label_quality": round(label_quality_score, 4),
+            "source_quality": round(source_quality_score, 4),
+            "lineage": round(lineage_score, 4),
+        }
+        failed_checks = [check for check in checks if check.status == "failed"]
+        warning_checks = [check for check in checks if check.status == "warning"]
+        threshold_shortfalls = self._threshold_shortfalls(
+            trust_score_total=trust_score_total,
+            coverage_score=coverage_score,
+            leakage_score=leakage_score,
+            feature_quality_score=feature_quality_score,
+            label_quality_score=label_quality_score,
+            source_quality_score=source_quality_score,
+            lineage_score=lineage_score,
+        )
+        rejection_reasons = self._rejection_reasons(failed_checks, threshold_shortfalls)
+        warning_reasons = self._warning_reasons(warning_checks, warnings)
+        check_status_counts = {
+            "passed": sum(1 for check in checks if check.status == "passed"),
+            "warning": len(warning_checks),
+            "failed": len(failed_checks),
+        }
+        decision_summary = self._decision_summary(
+            accepted=accepted,
+            score_breakdown=score_breakdown,
+            rejection_reasons=rejection_reasons,
+            warning_reasons=warning_reasons,
+        )
 
         return TrustReport(
             report_id=f"trust.{artifact_id}",
@@ -181,14 +214,23 @@ class TruthService:
             label_quality_score=round(label_quality_score, 4),
             source_quality_score=round(source_quality_score, 4),
             lineage_score=round(lineage_score, 4),
+            score_breakdown=score_breakdown,
             hard_failures=sorted(set(hard_failures)),
             warnings=sorted(set(warnings)),
+            rejection_reasons=rejection_reasons,
+            warning_reasons=warning_reasons,
+            check_status_counts=check_status_counts,
+            decision_summary=decision_summary,
             metrics={
                 "rows": len(dataset_df),
                 "columns": len(dataset_df.columns),
                 "duplicate_primary_clock_rows": int(leakage_check.metrics.get("duplicate_primary_clock_rows", 0)),
                 "quality_score": float(quality.get("quality_score", 0.0)),
                 "build_row_stats": build_row_stats,
+                "split_rows": coverage_check.metrics.get("split_rows", {}),
+                "feature_family_missingness": family_missingness_check.metrics,
+                "label_quality": label_check.metrics,
+                "source_quality": source_check.metrics,
             },
             thresholds={
                 "min_total_score": self.MIN_TOTAL_SCORE,
@@ -404,6 +446,20 @@ class TruthService:
             if int(dataset_df[col].null_count()) == len(dataset_df) and not dataset_df.is_empty()
         ]
         label_nulls = sum(int(dataset_df[col].null_count()) for col in label_cols)
+        horizon_metrics: dict[str, dict[str, int]] = {}
+        for horizon in label_pack.horizons_minutes:
+            horizon_token = f"_{horizon}m"
+            horizon_columns = [col for col in label_pack.output_columns if horizon_token in col]
+            present_columns = [col for col in horizon_columns if col in dataset_df.columns]
+            null_columns = [
+                col for col in present_columns
+                if int(dataset_df[col].null_count()) == len(dataset_df) and not dataset_df.is_empty()
+            ]
+            horizon_metrics[str(horizon)] = {
+                "expected_columns": len(horizon_columns),
+                "present_columns": len(present_columns),
+                "all_null_columns": len(null_columns),
+            }
 
         if missing_label_columns or all_null_label_columns:
             score = 0.0
@@ -424,6 +480,7 @@ class TruthService:
                 "label_nulls": label_nulls,
                 "missing_label_columns": missing_label_columns,
                 "all_null_label_columns": all_null_label_columns,
+                "horizon_metrics": horizon_metrics,
             },
             thresholds={"expected_label_columns": len(label_pack.output_columns), "label_nulls": 0},
             failure_reason=(
@@ -599,3 +656,93 @@ class TruthService:
         if {"train", "val", "test"}.issubset(set(split_frames)):
             return ["train", "val", "test"]
         return sorted(split_frames)
+
+    def _threshold_shortfalls(
+        self,
+        *,
+        trust_score_total: float,
+        coverage_score: float,
+        leakage_score: float,
+        feature_quality_score: float,
+        label_quality_score: float,
+        source_quality_score: float,
+        lineage_score: float,
+    ) -> list[str]:
+        shortfalls: list[str] = []
+        if trust_score_total < self.MIN_TOTAL_SCORE:
+            shortfalls.append(f"trust total {trust_score_total:.2f} is below minimum {self.MIN_TOTAL_SCORE:.2f}")
+        if coverage_score < self.MIN_COVERAGE_SCORE:
+            shortfalls.append(f"coverage {coverage_score:.2f} is below minimum {self.MIN_COVERAGE_SCORE:.2f}")
+        if leakage_score < 100.0:
+            shortfalls.append(f"leakage score {leakage_score:.2f} must equal 100.00")
+        if feature_quality_score < self.MIN_FEATURE_QUALITY_SCORE:
+            shortfalls.append(
+                f"feature quality {feature_quality_score:.2f} is below minimum {self.MIN_FEATURE_QUALITY_SCORE:.2f}"
+            )
+        if label_quality_score < self.MIN_LABEL_QUALITY_SCORE:
+            shortfalls.append(f"label quality {label_quality_score:.2f} is below minimum {self.MIN_LABEL_QUALITY_SCORE:.2f}")
+        if source_quality_score < self.MIN_SOURCE_QUALITY_SCORE:
+            shortfalls.append(
+                f"source quality {source_quality_score:.2f} is below minimum {self.MIN_SOURCE_QUALITY_SCORE:.2f}"
+            )
+        if lineage_score < 100.0:
+            shortfalls.append(f"lineage score {lineage_score:.2f} must equal 100.00")
+        return shortfalls
+
+    @staticmethod
+    def _rejection_reasons(failed_checks: list[QaCheckResult], threshold_shortfalls: list[str]) -> list[str]:
+        reasons = [
+            f"{check.check_name}: {check.failure_reason or 'check failed'}"
+            for check in failed_checks
+        ]
+        reasons.extend(threshold_shortfalls)
+        return reasons
+
+    def _warning_reasons(self, warning_checks: list[QaCheckResult], warning_codes: list[str]) -> list[str]:
+        reasons = []
+        reasons.extend(
+            f"{check.check_name}: {self._warning_detail_from_check(check)}"
+            for check in warning_checks
+        )
+        reasons.extend(self._warning_detail_from_code(code) for code in warning_codes)
+        return sorted({reason for reason in reasons if reason})
+
+    @staticmethod
+    def _warning_detail_from_check(check: QaCheckResult) -> str:
+        if check.failure_reason:
+            return check.failure_reason
+        if check.check_name == "feature_family_missingness":
+            warning_families = check.metrics.get("warning_families", [])
+            if warning_families:
+                return f"families approaching threshold: {', '.join(sorted(warning_families))}"
+        return "warning threshold reached"
+
+    @staticmethod
+    def _warning_detail_from_code(code: str) -> str:
+        messages = {
+            "dataset_contains_nulls": "dataset artifact contains null values",
+            "dataset_contains_constant_columns": "dataset artifact contains constant columns",
+            "source_quality_warning": "source quality is acceptable but below preferred research comfort",
+            "label_quality_warning": "label columns contain null values",
+            "feature_family_missingness_warning": "one or more feature families is approaching its missingness threshold",
+        }
+        return messages.get(code, code)
+
+    @staticmethod
+    def _decision_summary(
+        *,
+        accepted: bool,
+        score_breakdown: dict[str, float],
+        rejection_reasons: list[str],
+        warning_reasons: list[str],
+    ) -> str:
+        if accepted:
+            if warning_reasons:
+                return (
+                    f"accepted for publication with warnings; total={score_breakdown['total']:.2f}, "
+                    f"warnings={len(warning_reasons)}"
+                )
+            return f"accepted for publication; total={score_breakdown['total']:.2f}"
+        if rejection_reasons:
+            return f"rejected for publication; {rejection_reasons[0]}"
+        return f"rejected for publication; total={score_breakdown['total']:.2f}"

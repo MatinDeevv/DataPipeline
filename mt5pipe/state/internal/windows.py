@@ -3,20 +3,24 @@
 from __future__ import annotations
 
 import datetime as dt
-import math
 from typing import Callable
 
 import polars as pl
 
-from mt5pipe.bars.builder import timeframe_to_seconds
 from mt5pipe.contracts.state import parse_window_size
-from mt5pipe.quality.gaps import _is_forex_closed
+from mt5pipe.state.internal.bar_support import is_forex_closed
+from mt5pipe.state.internal.quality import (
+    coverage_mode_for_clock,
+    snapshot_overlap_confidence_hint,
+    snapshot_source_participation_score,
+    state_resolution_ms,
+)
 from mt5pipe.state.models import StateSnapshot, StateWindowRecord
 
 
 def session_code(ts_utc: dt.datetime) -> str:
     """Map UTC timestamps to the repo's canonical session labels."""
-    if _is_forex_closed(ts_utc):
+    if is_forex_closed(ts_utc):
         return "weekend_closed"
     hour = ts_utc.hour
     if 13 <= hour < 16:
@@ -28,15 +32,6 @@ def session_code(ts_utc: dt.datetime) -> str:
     if 0 <= hour < 8:
         return "asia"
     return "other"
-
-
-def state_resolution_ms(clock: str, *, tick_resolution_ms: int = 1_000) -> int:
-    """Return the expected observation resolution for a state clock."""
-    if clock.lower() == "tick":
-        return tick_resolution_ms
-    return timeframe_to_seconds(clock) * 1_000
-
-
 def canonical_ticks_to_state_rows(
     canonical_df: pl.DataFrame,
     *,
@@ -73,6 +68,20 @@ def canonical_ticks_to_state_rows(
         ts_msc = int(row["ts_msc"])
         primary_staleness_ms = 0 if prev_ts_msc is None else max(ts_msc - prev_ts_msc, 0)
         prev_ts_msc = ts_msc
+        quality_score = float(row.get("quality_score", 0.0) or 0.0)
+        source_participation_score = snapshot_source_participation_score(
+            source_count=source_count,
+            conflict_flag=bool(row.get("conflict_flag", False)),
+            disagreement_bps=disagreement_bps,
+            gap_fill_flag=False,
+            quality_score=quality_score,
+        )
+        overlap_confidence = snapshot_overlap_confidence_hint(
+            source_count=source_count,
+            source_participation_score=source_participation_score,
+            window_completeness=1.0,
+            source_quality_hint=quality_score,
+        )
 
         snapshot = StateSnapshot(
             state_version=state_version_ref,
@@ -101,12 +110,17 @@ def canonical_ticks_to_state_rows(
             primary_staleness_ms=primary_staleness_ms,
             secondary_staleness_ms=None,
             source_offset_ms=None,
-            quality_score=float(row.get("quality_score", 0.0) or 0.0),
-            source_quality_hint=float(row.get("quality_score", 0.0) or 0.0),
+            expected_interval_ms=state_resolution_ms("tick"),
+            observed_interval_ms=primary_staleness_ms,
+            quality_score=quality_score,
+            source_quality_hint=quality_score,
+            source_participation_score=source_participation_score,
+            overlap_confidence_hint=overlap_confidence,
             expected_observations=1,
             observed_observations=1,
             missing_observations=0,
             window_completeness=1.0,
+            gap_fill_flag=False,
             session_code=session_code(ts_utc),
             trust_flags=["conflict"] if bool(row.get("conflict_flag", False)) else [],
             provenance_refs=provenance_resolver(ts_utc.date()),
@@ -134,40 +148,52 @@ def build_state_windows(
         raise KeyError("State DataFrame must contain ts_utc")
 
     window_delta = parse_window_size(window_size)
-    window_ms = int(window_delta.total_seconds() * 1000)
     resolution_ms = state_resolution_ms(clock)
-    expected_bins = max(1, math.ceil(window_ms / resolution_ms))
+    expected_bins = max(1, int(window_delta.total_seconds() * 1000 / resolution_ms))
     working = state_df.sort("ts_utc")
     rows: list[dict[str, object]] = []
 
-    source_ts = working["ts_utc"].to_list()
-    if not source_ts:
+    ts_values = working["ts_utc"].to_list()
+    if not ts_values:
         return pl.DataFrame()
+    rows_as_dicts = working.to_dicts()
+    left = 0
 
-    for anchor in working.iter_rows(named=True):
+    for idx, anchor in enumerate(rows_as_dicts):
         anchor_ts = anchor["ts_utc"]
         if not isinstance(anchor_ts, dt.datetime):
             raise TypeError("State row ts_utc must be a timezone-aware datetime")
         lower_bound = anchor_ts - window_delta
-        window_df = working.filter((pl.col("ts_utc") > lower_bound) & (pl.col("ts_utc") <= anchor_ts))
-        if window_df.is_empty():
+        while left <= idx and rows_as_dicts[left]["ts_utc"] <= lower_bound:
+            left += 1
+        if left > idx:
             continue
 
-        observed_bins = _observed_bins(window_df, resolution_ms)
+        window_rows = rows_as_dicts[left : idx + 1]
+        observed_bins = _observed_bins_from_rows(window_rows, resolution_ms)
         missing_bins = max(expected_bins - observed_bins, 0)
         completeness = (expected_bins - missing_bins) / expected_bins
-        if not include_partial_windows and completeness < 1.0:
+        warmup_satisfied = missing_bins == 0
+        if not include_partial_windows and not warmup_satisfied:
             continue
 
-        mids = _series_to_list(window_df, "mid", default=0.0)
-        spreads = _series_to_list(window_df, "spread", default=0.0)
-        source_counts = _series_to_list(window_df, "source_count", default=1)
-        quality_scores = _series_to_list(window_df, "quality_score", default=0.0)
-        disagreements = _series_to_optional_list(window_df, "disagreement_bps")
-        staleness = _series_to_optional_list(window_df, "primary_staleness_ms")
-        conflicts = [bool(v) for v in _series_to_list(window_df, "conflict_flag", default=False)]
-        source_offsets = _series_to_optional_list(window_df, "source_offset_ms")
+        mids = [float(row.get("mid", 0.0) or 0.0) for row in window_rows]
+        spreads = [float(row.get("spread", 0.0) or 0.0) for row in window_rows]
+        source_counts = [int(row.get("source_count", 0) or 0) for row in window_rows]
+        quality_scores = [float(row.get("quality_score", 0.0) or 0.0) for row in window_rows]
+        source_quality_hints = _optional_list_from_rows(window_rows, "source_quality_hint", float)
+        participation_scores = _optional_list_from_rows(window_rows, "source_participation_score", float)
+        overlap_confidences = _optional_list_from_rows(window_rows, "overlap_confidence_hint", float)
+        disagreements = _optional_list_from_rows(window_rows, "disagreement_bps", float)
+        staleness = _optional_list_from_rows(window_rows, "primary_staleness_ms", int)
+        conflicts = [bool(row.get("conflict_flag", False)) for row in window_rows]
+        source_offsets = _optional_list_from_rows(window_rows, "source_offset_ms", int)
+        gap_fill_flags = [bool(row.get("gap_fill_flag", False)) for row in window_rows]
+        observed_span_ms = max(int(window_rows[-1]["ts_msc"]) - int(window_rows[0]["ts_msc"]), 0) if len(window_rows) > 1 else 0
+        gap_count, max_gap_ms = _gap_stats(clock, resolution_ms, staleness, gap_fill_flags)
         mid_returns = _mid_return_bps(mids)
+        row_count = len(window_rows)
+        filled_row_count = sum(1 for flag in gap_fill_flags if flag)
 
         record = StateWindowRecord(
             state_version=state_version,
@@ -175,21 +201,32 @@ def build_state_windows(
             symbol=symbol,
             clock=clock,
             anchor_ts_utc=anchor_ts,
-            anchor_ts_msc=int(anchor["ts_msc"]) if anchor.get("ts_msc") is not None else int(anchor_ts.timestamp() * 1000),
+            anchor_ts_msc=int(anchor.get("ts_msc")) if anchor.get("ts_msc") is not None else int(anchor_ts.timestamp() * 1000),
             window_size=window_size,
             window_start_utc=lower_bound,
             window_end_utc=anchor_ts,
-            row_count=window_df.height,
+            row_count=row_count,
             expected_row_count=expected_bins,
             missing_row_count=missing_bins,
+            warmup_missing_rows=missing_bins,
+            warmup_satisfied=warmup_satisfied,
             completeness=completeness,
-            source_count_mean=float(sum(source_counts) / len(source_counts)) if source_counts else 0.0,
-            dual_source_ratio_window=float(sum(1 for value in source_counts if value >= 2) / len(source_counts)) if source_counts else 0.0,
-            quality_score_mean=float(sum(quality_scores) / len(quality_scores)) if quality_scores else 0.0,
+            coverage_mode=coverage_mode_for_clock(clock),
+            observed_span_ms=observed_span_ms,
+            source_count_mean=float(sum(source_counts) / row_count) if source_counts else 0.0,
+            dual_source_ratio_window=float(sum(1 for value in source_counts if value >= 2) / row_count) if row_count else 0.0,
+            quality_score_mean=float(sum(quality_scores) / row_count) if quality_scores else 0.0,
+            source_quality_hint_mean=_mean_optional(source_quality_hints),
+            source_participation_score_mean=_mean_optional(participation_scores),
+            overlap_confidence_mean=_mean_optional(overlap_confidences),
             conflict_count_window=sum(1 for value in conflicts if value),
-            conflict_ratio=float(sum(1 for value in conflicts if value) / len(conflicts)) if conflicts else 0.0,
+            conflict_ratio=float(sum(1 for value in conflicts if value) / row_count) if row_count else 0.0,
             disagreement_bps_mean=_mean_optional(disagreements),
             staleness_ms_max=_max_optional(staleness),
+            filled_row_count=filled_row_count,
+            filled_ratio=float(filled_row_count / row_count) if row_count else 0.0,
+            gap_count=gap_count,
+            max_gap_ms=max_gap_ms,
             mid_values=mids,
             spread_values=spreads,
             mid_return_bps_values=mid_returns,
@@ -243,23 +280,44 @@ def _disagreement_bps(left: float | None, right: float | None) -> float | None:
     return abs(left - right) / avg * 10_000.0
 
 
-def _series_to_list(df: pl.DataFrame, column: str, *, default: object) -> list:
-    if column not in df.columns:
-        return [default] * df.height
-    return df[column].fill_null(default).to_list()
-
-
-def _series_to_optional_list(df: pl.DataFrame, column: str) -> list:
-    if column not in df.columns:
-        return [None] * df.height
-    return df[column].to_list()
-
-
-def _observed_bins(window_df: pl.DataFrame, resolution_ms: int) -> int:
-    ts_values = window_df["ts_msc"].to_list() if "ts_msc" in window_df.columns else [
-        int(ts.timestamp() * 1000) for ts in window_df["ts_utc"].to_list()
+def _observed_bins_from_rows(window_rows: list[dict[str, object]], resolution_ms: int) -> int:
+    ts_values = [
+        int(row["ts_msc"]) if row.get("ts_msc") is not None else int(row["ts_utc"].timestamp() * 1000)
+        for row in window_rows
     ]
     return len({ts // resolution_ms for ts in ts_values})
+
+
+def _optional_list_from_rows(window_rows: list[dict[str, object]], column: str, caster: type[int] | type[float]) -> list[int | float | None]:
+    values: list[int | float | None] = []
+    for row in window_rows:
+        value = row.get(column)
+        values.append(None if value is None else caster(value))
+    return values
+
+
+def _gap_stats(
+    clock: str,
+    resolution_ms: int,
+    staleness: list[int | None],
+    gap_fill_flags: list[bool],
+) -> tuple[int, int]:
+    if clock.lower() == "tick":
+        gap_events = [int(value) for value in staleness if value is not None and int(value) > resolution_ms]
+        return len(gap_events), max(gap_events, default=0)
+    gap_count = 0
+    max_run = 0
+    current_run = 0
+    for flag in gap_fill_flags:
+        if flag:
+            current_run += 1
+            max_run = max(max_run, current_run)
+        elif current_run:
+            gap_count += 1
+            current_run = 0
+    if current_run:
+        gap_count += 1
+    return gap_count, max_run * resolution_ms
 
 
 def _mean_optional(values: list[float | None]) -> float | None:

@@ -169,3 +169,58 @@ impact: Phase 3 datasets can be inspected and compared from the CLI without manu
 docs_updated: yes
 notes: output mirrors compiler manifest metadata for inspectability and diffability
 ```
+
+### [2026-04-04 21:37]
+
+```
+agent: agent_2
+type: contract-change
+module: mt5pipe.features.public, mt5pipe.features.registry.defaults
+symbol: add_multiscale_features, multiscale.consistency@1.0.0
+old: public surface exposed disagreement/event_shape/entropy as the only machine-native families; no stable multiscale selector existed
+new: features.public now re-exports add_multiscale_features and the default registry now resolves multiscale/* to multiscale.consistency@1.0.0 with explicit warmup/dependencies/output columns
+impact: compiler/dataset specs can consume multiscale/* without touching feature internals; Agent 3 can compile the new stable selector directly
+docs_updated: yes
+notes: multiscale.consistency@1.0.0 outputs trend_alignment_5_15_60, return_energy_ratio_5_60, volatility_ratio_5_60, range_expansion_ratio_15_60, and tick_intensity_ratio_5_60
+```
+
+### [2026-04-04 21:37]
+
+```
+agent: agent_2
+type: contract-change
+module: mt5pipe.features.disagreement, mt5pipe.features.event_shape, mt5pipe.features.entropy, mt5pipe.features.labels, mt5pipe.labels.service
+symbol: Phase 3 machine-native family warmup/missingness behavior; triple_barrier_* tail semantics; label manifest metadata.label_diagnostics
+old: disagreement/event_shape/entropy emitted some early-row values before warmup and could synthesize numeric outputs from missing core inputs; triple_barrier_* treated insufficient forward horizon as time-expiry 0; label manifests exposed only basic row/column metadata
+new: disagreement/event_shape/entropy now null all family outputs through declared warmup rows and degrade to typed-null columns when core inputs are missing; triple_barrier_* now returns null for insufficient forward horizon and includes the full horizon endpoint; label manifests now include compact horizon/class-balance diagnostics plus exclusions
+impact: compiler/truth consumers should expect cleaner warmup/tail nulls for machine-native features and labels, plus richer label artifact metadata for inspectability
+docs_updated: yes
+notes: label pack key and output column names stay unchanged; only tail availability semantics and manifest metadata became stricter
+```
+### [2026-04-04 21:38]
+
+```
+agent: agent_1
+type: contract-change
+module: mt5pipe.state.models.StateSnapshot, mt5pipe.state.models.StateArtifactManifest, mt5pipe.state.models.StateWindowRecord
+symbol: StateSnapshot.expected_interval_ms/observed_interval_ms/source_participation_score/overlap_confidence_hint/gap_fill_flag, StateCoverageSummary, StateSourceQualitySummary, StateArtifactManifest.coverage_summary/source_quality_summary/time-range fields, StateWindowRecord warmup/completeness/gap/source-quality fields
+old: state artifacts exposed basic snapshot/window structure with limited completeness and source-quality metadata
+new: state artifacts now carry typed coverage and source-quality summaries plus per-snapshot/per-window completeness, participation, overlap-confidence, staleness, and gap-fill annotations suitable for wider-range machine-native builds
+impact: Agent 2 can consume richer PIT-safe state/window metadata from mt5pipe.state.public; Agent 3/compiler/truth can reason about time range, coverage, and source quality from state manifests without guessing
+docs_updated: no
+notes: additive shape expansion only; no merge/backfill semantics changed
+```
+
+### [2026-04-04 21:38]
+
+```
+agent: agent_1
+type: contract-change
+module: mt5pipe.state.public
+symbol: StateCoverageSummary, StateSourceQualitySummary, load_state_window_artifact
+old: state.public exposed snapshot/window contracts and load_state_artifact/materialize_state_windows but not typed coverage/source-quality summaries or a public window-artifact loader
+new: state.public now exports typed coverage/source-quality summary models and load_state_window_artifact for stable cross-sector access to persisted rolling windows
+impact: Agent 2/3 can stay on mt5pipe.state.public for window metadata and persisted window loading
+docs_updated: no
+notes: public surface remains additive and boundary-clean
+```

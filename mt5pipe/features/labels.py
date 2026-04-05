@@ -95,9 +95,9 @@ def add_triple_barrier_labels(
         mae_col = f"mae_{h}m"
         mfe_col = f"mfe_{h}m"
 
-        tb_vals: list[int] = []
-        mae_vals: list[float] = []
-        mfe_vals: list[float] = []
+        tb_vals: list[int | None] = []
+        mae_vals: list[float | None] = []
+        mfe_vals: list[float | None] = []
 
         closes = df[close_col].to_list()
         highs = df[high_col].to_list()
@@ -109,10 +109,16 @@ def add_triple_barrier_labels(
 
         for i in range(n):
             entry = closes[i]
-            if entry <= 0:
-                tb_vals.append(0)
-                mae_vals.append(0.0)
-                mfe_vals.append(0.0)
+            if entry is None or entry <= 0:
+                tb_vals.append(None)
+                mae_vals.append(None)
+                mfe_vals.append(None)
+                continue
+
+            if i + h >= n:
+                tb_vals.append(None)
+                mae_vals.append(None)
+                mfe_vals.append(None)
                 continue
 
             # Compute barrier fractions
@@ -131,8 +137,8 @@ def add_triple_barrier_labels(
             min_low = entry
             label = 0  # time expiry
 
-            end_idx = min(i + h, n)
-            for j in range(i + 1, end_idx):
+            end_idx = min(i + h, n - 1)
+            for j in range(i + 1, end_idx + 1):
                 max_high = max(max_high, highs[j])
                 min_low = min(min_low, lows[j])
 

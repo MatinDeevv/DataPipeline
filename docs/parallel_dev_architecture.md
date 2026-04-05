@@ -28,6 +28,8 @@ The top-level package is `mt5pipe/`. In architecture discussions, "pipeline" map
 - **Tests:** `tests/test_labels.py`, feature-related tests
 - **Responsibility:** Feature builders, feature registry, label generation, label registry
 - **Public surface:** registry helpers, artifact ref/load helpers, and stable family builders are re-exported from `mt5pipe.features.public` and `mt5pipe.labels.public`
+- **Stable machine-native families:** `disagreement/*`, `event_shape/*`, `entropy/*`, `multiscale/*`
+- **Label artifact note:** label manifests include compact horizon/class-balance diagnostics; insufficient forward-horizon triple-barrier rows are explicitly null
 
 ### Agent 3 — Compiler
 - **Owns:** `mt5pipe/compiler/`, `mt5pipe/truth/`, `mt5pipe/catalog/`

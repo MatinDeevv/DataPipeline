@@ -9,7 +9,6 @@ from typing import Any
 
 import polars as pl
 
-from mt5pipe.bars.builder import timeframe_to_seconds
 from mt5pipe.contracts.artifacts import ArtifactKind
 from mt5pipe.contracts.state import (
     StateArtifactRef,
@@ -17,8 +16,6 @@ from mt5pipe.contracts.state import (
     StateWindowRequest,
     TickArtifactRef,
 )
-from mt5pipe.quality.cleaning import validate_bars
-from mt5pipe.quality.gaps import detect_gaps, fill_bar_gaps
 from mt5pipe.state.internal.artifacts import (
     build_artifact_id,
     build_id_now,
@@ -27,8 +24,21 @@ from mt5pipe.state.internal.artifacts import (
     state_code_version,
     write_state_manifest,
 )
+from mt5pipe.state.internal.bar_support import detect_gaps, fill_bar_gaps, timeframe_to_seconds, validate_bars
+from mt5pipe.state.internal.quality import (
+    build_state_coverage_summary,
+    build_state_source_quality_summary,
+    snapshot_overlap_confidence_hint,
+    snapshot_source_participation_score,
+    state_resolution_ms,
+)
 from mt5pipe.state.internal.windows import build_state_windows, canonical_ticks_to_state_rows, session_code
-from mt5pipe.state.models import StateArtifactManifest, StateSnapshot
+from mt5pipe.state.models import (
+    StateArtifactManifest,
+    StateCoverageSummary,
+    StateSnapshot,
+    StateSourceQualitySummary,
+)
 from mt5pipe.storage.parquet_store import ParquetStore
 from mt5pipe.storage.paths import StoragePaths
 
@@ -39,6 +49,8 @@ class StateMaterializationResult:
     artifact_id: str
     manifest: StateArtifactManifest
     manifest_path: Path
+    coverage_summary: StateCoverageSummary
+    source_quality_summary: StateSourceQualitySummary
     state_df: pl.DataFrame
     base_df: pl.DataFrame
 
@@ -48,6 +60,8 @@ class StateWindowMaterializationResult:
     ref: StateWindowArtifactRef
     manifest: StateArtifactManifest
     manifest_path: Path
+    coverage_summary: StateCoverageSummary
+    source_quality_summary: StateSourceQualitySummary
     window_df: pl.DataFrame
 
 
@@ -241,6 +255,8 @@ class StateService:
                 include_partial_windows=request.include_partial_windows,
             )
             logical_name = f"{request.symbol}.{clock}.{window_size}"
+            coverage_summary = build_state_coverage_summary(window_df, clock=clock)
+            source_quality_summary = build_state_source_quality_summary(window_df)
             content_hash = compute_content_hash(
                 {
                     "artifact_kind": "state_window",
@@ -253,6 +269,8 @@ class StateService:
                     "anchor_end": str(window_df["anchor_ts_utc"].max()) if not window_df.is_empty() else "",
                     "source_artifact_id": source_artifact_id,
                     "input_partition_refs": input_partition_refs,
+                    "coverage_summary": coverage_summary.model_dump(mode="json"),
+                    "source_quality_summary": source_quality_summary.model_dump(mode="json"),
                 }
             )
             artifact_id = build_artifact_id("state_window", logical_name, content_hash)
@@ -287,6 +305,13 @@ class StateService:
                 code_version=resolved_code_version,
                 input_partition_refs=input_partition_refs,
                 parent_artifact_refs=[source_artifact_id],
+                symbol=request.symbol,
+                clock=clock,
+                window_size=window_size,
+                time_range_start_utc=coverage_summary.time_range_start_utc,
+                time_range_end_utc=coverage_summary.time_range_end_utc,
+                coverage_summary=coverage_summary,
+                source_quality_summary=source_quality_summary,
                 metadata={
                     "row_count": len(window_df),
                     "column_count": len(window_df.columns),
@@ -294,6 +319,8 @@ class StateService:
                     "anchor_start": str(window_df["anchor_ts_utc"].min()) if not window_df.is_empty() else "",
                     "anchor_end": str(window_df["anchor_ts_utc"].max()) if not window_df.is_empty() else "",
                     "source_artifact_id": source_artifact_id,
+                    "coverage_summary": coverage_summary.model_dump(mode="json"),
+                    "source_quality_summary": source_quality_summary.model_dump(mode="json"),
                 },
             )
             self._write_state_window_partitions(request.symbol, clock, request.state_version, window_size, window_df)
@@ -303,6 +330,8 @@ class StateService:
                 ref=ref,
                 manifest=manifest,
                 manifest_path=manifest_path,
+                coverage_summary=coverage_summary,
+                source_quality_summary=source_quality_summary,
                 window_df=window_df,
             )
 
@@ -341,6 +370,8 @@ class StateService:
     ) -> StateMaterializationResult:
         created_at = dt.datetime.now(dt.timezone.utc)
         logical_name = f"{symbol}.{clock}"
+        coverage_summary = build_state_coverage_summary(state_df, clock=clock)
+        source_quality_summary = build_state_source_quality_summary(state_df)
         content_hash = compute_content_hash(
             {
                 "artifact_kind": "state",
@@ -351,6 +382,8 @@ class StateService:
                 "time_range_start": str(state_df["ts_utc"].min()) if not state_df.is_empty() else "",
                 "time_range_end": str(state_df["ts_utc"].max()) if not state_df.is_empty() else "",
                 "input_partition_refs": input_partition_refs,
+                "coverage_summary": coverage_summary.model_dump(mode="json"),
+                "source_quality_summary": source_quality_summary.model_dump(mode="json"),
             }
         )
         artifact_id = build_artifact_id("state", logical_name, content_hash)
@@ -382,12 +415,20 @@ class StateService:
             code_version=code_version,
             merge_config_ref=merge_config_ref,
             input_partition_refs=input_partition_refs,
+            symbol=symbol,
+            clock=clock,
+            time_range_start_utc=coverage_summary.time_range_start_utc,
+            time_range_end_utc=coverage_summary.time_range_end_utc,
+            coverage_summary=coverage_summary,
+            source_quality_summary=source_quality_summary,
             metadata={
                 "row_count": len(state_df),
                 "column_count": len(state_df.columns),
                 "time_range_start": str(state_df["ts_utc"].min()) if not state_df.is_empty() else "",
                 "time_range_end": str(state_df["ts_utc"].max()) if not state_df.is_empty() else "",
                 "clock": clock,
+                "coverage_summary": coverage_summary.model_dump(mode="json"),
+                "source_quality_summary": source_quality_summary.model_dump(mode="json"),
             },
         )
 
@@ -399,6 +440,8 @@ class StateService:
             artifact_id=artifact_id,
             manifest=manifest,
             manifest_path=manifest_path,
+            coverage_summary=coverage_summary,
+            source_quality_summary=source_quality_summary,
             state_df=state_df,
             base_df=base_df,
         )
@@ -443,6 +486,7 @@ class StateService:
         base_df: pl.DataFrame,
     ) -> pl.DataFrame:
         tf_seconds = timeframe_to_seconds(clock)
+        expected_interval_ms = state_resolution_ms(clock)
         prev_ts_msc: int | None = None
         rows: list[dict[str, object]] = []
 
@@ -454,7 +498,9 @@ class StateService:
             spread = self._resolve_spread(row)
             bid = self._resolve_bid(row, spread)
             ask = self._resolve_ask(row, spread, bid)
-            source_count = int(row.get("source_count", 1) or 1)
+            gap_fill_flag = bool(row.get("_filled", False))
+            raw_source_count = row.get("source_count", 1)
+            source_count = int(raw_source_count) if raw_source_count is not None else (0 if gap_fill_flag else 1)
             conflict_count = int(row.get("conflict_count", 0) or 0)
             dual_ratio = row.get("dual_source_ratio")
             dual_ratio_f = float(dual_ratio) if dual_ratio is not None else None
@@ -463,11 +509,37 @@ class StateService:
                 source_count=source_count,
                 conflict_count=conflict_count,
                 dual_source_ratio=dual_ratio_f,
-                filled=bool(row.get("_filled", False)),
+                filled=gap_fill_flag,
             )
             ts_msc = int(ts_utc.timestamp() * 1000)
-            primary_staleness_ms = 0 if prev_ts_msc is None else max(ts_msc - prev_ts_msc, 0)
+            observed_interval_ms = 0 if prev_ts_msc is None else max(ts_msc - prev_ts_msc, 0)
+            primary_staleness_ms = observed_interval_ms
             prev_ts_msc = ts_msc
+            observed_observations = 0 if gap_fill_flag else 1
+            missing_observations = 1 - observed_observations
+            window_completeness = float(observed_observations)
+            source_quality_hint = quality_score if not gap_fill_flag else max(0.0, quality_score * 0.5)
+            source_participation_score = snapshot_source_participation_score(
+                source_count=source_count,
+                conflict_flag=conflict_count > 0,
+                disagreement_bps=None,
+                gap_fill_flag=gap_fill_flag,
+                quality_score=quality_score,
+            )
+            overlap_confidence = snapshot_overlap_confidence_hint(
+                source_count=source_count,
+                source_participation_score=source_participation_score,
+                window_completeness=window_completeness,
+                source_quality_hint=source_quality_hint,
+            )
+            source_primary = "gap_fill" if gap_fill_flag else "canonical"
+            trust_flags: list[str] = []
+            if gap_fill_flag:
+                trust_flags.append("filled_gap")
+            if source_count <= 0:
+                trust_flags.append("no_direct_source")
+            if conflict_count > 0:
+                trust_flags.append("conflict")
 
             snapshot = StateSnapshot(
                 state_version=state_version_ref,
@@ -482,7 +554,7 @@ class StateService:
                 ask=ask,
                 mid=(bid + ask) / 2.0,
                 spread=ask - bid,
-                source_primary="canonical",
+                source_primary=source_primary,
                 source_secondary="multi" if source_count >= 2 else None,
                 source_count=source_count,
                 merge_mode=merge_mode,
@@ -496,14 +568,19 @@ class StateService:
                 primary_staleness_ms=primary_staleness_ms,
                 secondary_staleness_ms=None,
                 source_offset_ms=None,
+                expected_interval_ms=expected_interval_ms,
+                observed_interval_ms=observed_interval_ms,
                 quality_score=quality_score,
-                source_quality_hint=quality_score,
+                source_quality_hint=source_quality_hint,
+                source_participation_score=source_participation_score,
+                overlap_confidence_hint=overlap_confidence,
                 expected_observations=1,
-                observed_observations=1,
-                missing_observations=0,
-                window_completeness=1.0,
+                observed_observations=observed_observations,
+                missing_observations=missing_observations,
+                window_completeness=window_completeness,
+                gap_fill_flag=gap_fill_flag,
                 session_code=session_code(ts_utc),
-                trust_flags=["filled_gap"] if bool(row.get("_filled", False)) else [],
+                trust_flags=trust_flags,
                 provenance_refs=self._bar_provenance_refs(symbol, clock, ts_utc.date()),
             )
             rows.append(snapshot.model_dump())
@@ -641,6 +718,15 @@ def load_state_artifact(
 ) -> pl.DataFrame:
     """Module-level public loader for persisted state snapshots."""
     return StateService(paths, store).load_state_artifact(ref)
+
+
+def load_state_window_artifact(
+    paths: StoragePaths,
+    store: ParquetStore,
+    ref: StateWindowArtifactRef,
+) -> pl.DataFrame:
+    """Module-level public loader for persisted rolling state windows."""
+    return StateService(paths, store).load_state_window_artifact(ref)
 
 
 def materialize_state_windows(

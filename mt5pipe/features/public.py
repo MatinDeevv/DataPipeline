@@ -30,6 +30,7 @@ from mt5pipe.features.builder import (
     add_entropy_features,
     add_event_shape_features,
     add_lagged_bar_features,
+    add_multiscale_features,
     add_session_features,
     add_spread_quality_features,
     add_time_features,
@@ -65,6 +66,7 @@ __all__ = [
     "add_disagreement_features",
     "add_event_shape_features",
     "add_entropy_features",
+    "add_multiscale_features",
     # Label models
     "LabelPack",
     "LabelArtifactRef",

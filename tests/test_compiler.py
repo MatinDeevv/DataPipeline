@@ -12,7 +12,6 @@ from mt5pipe.compiler.manifest import build_stage_artifact_id, build_stage_manif
 from mt5pipe.compiler.models import LineageManifest
 from mt5pipe.compiler.service import compile_dataset_spec, diff_artifacts, inspect_artifact
 from mt5pipe.features.public import FeatureSpec
-from mt5pipe.state.public import StateService
 from mt5pipe.storage.parquet_store import ParquetStore
 from mt5pipe.storage.paths import StoragePaths
 
@@ -83,6 +82,144 @@ def _write_merge_qa(date: dt.date, paths: StoragePaths, store: ParquetStore, dua
         ]
     )
     store.write(df, paths.merge_qa_file("XAUUSD", date))
+
+
+def _build_state_fixture(base_df: pl.DataFrame, state_version_ref: str = "state.default@1.0.0") -> pl.DataFrame:
+    rows: list[dict[str, object]] = []
+    for index, row in enumerate(base_df.sort("time_utc").iter_rows(named=True)):
+        ts_utc = row["time_utc"]
+        close = float(row["close"])
+        spread = float(row["spread_mean"])
+        source_count = int(row["source_count"])
+        conflict_count = int(row["conflict_count"])
+        rows.append(
+            {
+                "schema_version": "1.0.0",
+                "state_version": state_version_ref,
+                "snapshot_id": f"snapshot-{index}",
+                "symbol": row["symbol"],
+                "ts_utc": ts_utc,
+                "ts_msc": int(ts_utc.timestamp() * 1000),
+                "clock": row["timeframe"],
+                "window_start_utc": ts_utc,
+                "window_end_utc": ts_utc,
+                "bid": close - spread / 2.0,
+                "ask": close + spread / 2.0,
+                "mid": close,
+                "spread": spread,
+                "source_primary": "broker_a",
+                "source_secondary": "broker_b" if source_count > 1 else "",
+                "source_count": source_count,
+                "merge_mode": "fixture",
+                "conflict_flag": conflict_count > 0,
+                "disagreement_bps": conflict_count * 0.5,
+                "spread_disagreement_bps": spread * 10.0,
+                "broker_a_mid": close,
+                "broker_b_mid": close + 0.01 if source_count > 1 else close,
+                "broker_a_spread": spread,
+                "broker_b_spread": spread + 0.01 if source_count > 1 else spread,
+                "primary_staleness_ms": 0,
+                "secondary_staleness_ms": 0,
+                "source_offset_ms": 0,
+                "quality_score": max(60.0, 82.0 - conflict_count * 4.0),
+                "source_quality_hint": "fixture",
+                "expected_observations": 1,
+                "observed_observations": 1,
+                "missing_observations": 0,
+                "window_completeness": 1.0,
+                "session_code": "fixture",
+                "event_flags": [],
+                "trust_flags": [],
+                "provenance_refs": [f"bar://{row['symbol']}/{row['timeframe']}/{ts_utc.isoformat()}"],
+            }
+        )
+    return pl.DataFrame(rows)
+
+
+def _write_state_fixture_partitions(
+    base_df: pl.DataFrame,
+    paths: StoragePaths,
+    store: ParquetStore,
+    *,
+    state_version_ref: str = "state.default@1.0.0",
+) -> pl.DataFrame:
+    state_df = _build_state_fixture(base_df, state_version_ref=state_version_ref)
+    dated = state_df.with_columns(pl.col("ts_utc").dt.date().alias("_date"))
+    for date_val in dated["_date"].unique().sort().to_list():
+        day_df = dated.filter(pl.col("_date") == date_val).drop("_date")
+        store.write(day_df, paths.state_file("XAUUSD", "M1", date_val, state_version_ref))
+    return state_df
+
+
+def _collect_partition_refs(paths: StoragePaths, date_from: dt.date, date_to: dt.date) -> list[str]:
+    refs: list[str] = []
+    current = date_from
+    while current <= date_to:
+        refs.append(str(paths.built_bars_dir("XAUUSD", "M1", current)))
+        current += dt.timedelta(days=1)
+    return refs
+
+
+def _register_state_artifact(
+    *,
+    paths: StoragePaths,
+    store: ParquetStore,
+    catalog: CatalogDB,
+    base_df: pl.DataFrame,
+    state_version_ref: str,
+    date_from: dt.date,
+    date_to: dt.date,
+    build_id: str,
+    dataset_spec_ref: str,
+) -> tuple[str, LineageManifest, pl.DataFrame]:
+    state_df = _write_state_fixture_partitions(base_df, paths, store, state_version_ref=state_version_ref)
+    input_partition_refs = _collect_partition_refs(paths, date_from, date_to)
+    created_at = dt.datetime.now(UTC)
+    logical_name = "XAUUSD.M1"
+    content_hash = compute_content_hash(
+        {
+            "artifact_kind": "state",
+            "state_version": state_version_ref,
+            "rows": len(state_df),
+            "columns": state_df.columns,
+            "input_partition_refs": input_partition_refs,
+        }
+    )
+    artifact_id = build_stage_artifact_id("state", logical_name, created_at, content_hash)
+    artifact_uri = paths.root / "state" / "symbol=XAUUSD" / "clock=M1" / f"state_version={state_version_ref}"
+    manifest = LineageManifest(
+        manifest_id=build_stage_manifest_id("state", logical_name, created_at, content_hash),
+        artifact_id=artifact_id,
+        artifact_kind="state",
+        logical_name=logical_name,
+        logical_version=state_version_ref,
+        artifact_uri=str(artifact_uri),
+        content_hash=content_hash,
+        build_id=build_id,
+        created_at=created_at,
+        status="accepted",
+        dataset_spec_ref=dataset_spec_ref,
+        state_artifact_refs=[],
+        feature_spec_refs=[],
+        label_pack_ref=None,
+        truth_report_ref=None,
+        code_version="workspace-local-no-git",
+        merge_config_ref="merge.default@test",
+        input_partition_refs=input_partition_refs,
+        parent_artifact_refs=[],
+        metadata={
+            "row_count": len(state_df),
+            "column_count": len(state_df.columns),
+            "time_range_start": str(state_df["ts_utc"].min()) if not state_df.is_empty() else "",
+            "time_range_end": str(state_df["ts_utc"].max()) if not state_df.is_empty() else "",
+            "symbol": "XAUUSD",
+            "clock": "M1",
+            "fixture": True,
+        },
+    )
+    manifest_path = write_manifest_sidecar(manifest, paths)
+    catalog.register_artifact(manifest, str(manifest_path), detail="registered fixture state artifact")
+    return artifact_id, manifest, state_df
 
 
 def _write_project_config(project_root: Path, storage_root: Path) -> Path:
@@ -177,12 +314,14 @@ def _seed_project_data(storage_root: Path) -> StoragePaths:
     paths = StoragePaths(storage_root)
     store = ParquetStore(compression="snappy", row_group_size=1000)
 
-    _write_bars_by_date(_make_bars(dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC), 2000, "M1", 1), paths, store, "M1")
+    m1_df = _make_bars(dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC), 2000, "M1", 1)
+    _write_bars_by_date(m1_df, paths, store, "M1")
     _write_bars_by_date(_make_bars(dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC), 500, "M5", 5), paths, store, "M5")
     _write_bars_by_date(_make_bars(dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC), 200, "M15", 15), paths, store, "M15")
     _write_bars_by_date(_make_bars(dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC), 48, "H1", 60), paths, store, "H1")
     _write_bars_by_date(_make_bars(dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC), 12, "H4", 240), paths, store, "H4")
     _write_bars_by_date(_make_bars(dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC), 2, "D1", 24 * 60), paths, store, "D1")
+    _write_state_fixture_partitions(m1_df, paths, store)
     _write_merge_qa(dt.date(2026, 4, 1), paths, store)
     _write_merge_qa(dt.date(2026, 4, 2), paths, store)
     return paths
@@ -326,22 +465,28 @@ def _register_feature_artifact(
 def _prepare_phase3_artifacts(project_root: Path, paths: StoragePaths, store: ParquetStore) -> tuple[str, list[str]]:
     catalog = CatalogDB(paths.catalog_db_path())
     try:
-        state_service = StateService(paths, store, catalog)
-        state_result = state_service.materialize_state(
-            symbol="XAUUSD",
-            clock="M1",
+        base_df = pl.concat(
+            [
+                store.read_dir(paths.built_bars_dir("XAUUSD", "M1", dt.date(2026, 4, 1))),
+                store.read_dir(paths.built_bars_dir("XAUUSD", "M1", dt.date(2026, 4, 2))),
+            ],
+            how="diagonal_relaxed",
+        ).sort("time_utc")
+        state_artifact_id, state_manifest, _ = _register_state_artifact(
+            paths=paths,
+            store=store,
+            catalog=catalog,
+            base_df=base_df,
             state_version_ref="state.default@1.0.0",
             date_from=dt.date(2026, 4, 1),
             date_to=dt.date(2026, 4, 2),
             build_id="build.phase3.fixtures",
             dataset_spec_ref="fixture.nonhuman@1.0.0",
-            code_version="workspace-local-no-git",
-            merge_config_ref="merge.default@test",
         )
 
         artifact_ids: list[str] = []
         for spec in _phase3_feature_specs():
-            frame = _build_phase3_feature_frame(state_result.base_df, spec)
+            frame = _build_phase3_feature_frame(base_df, spec)
             artifact_ids.append(
                 _register_feature_artifact(
                     paths=paths,
@@ -349,12 +494,12 @@ def _prepare_phase3_artifacts(project_root: Path, paths: StoragePaths, store: Pa
                     catalog=catalog,
                     spec=spec,
                     frame=frame,
-                    state_artifact_id=state_result.artifact_id,
-                    input_partition_refs=state_result.manifest.input_partition_refs,
+                    state_artifact_id=state_artifact_id,
+                    input_partition_refs=state_manifest.input_partition_refs,
                 )
             )
 
-        return state_result.artifact_id, artifact_ids
+        return state_artifact_id, artifact_ids
     finally:
         catalog.close()
 
@@ -591,22 +736,28 @@ def test_compile_phase3_rejects_when_artifact_backed_family_is_incomplete(tmp_pa
 
     catalog = CatalogDB(paths.catalog_db_path())
     try:
-        state_service = StateService(paths, store, catalog)
-        state_result = state_service.materialize_state(
-            symbol="XAUUSD",
-            clock="M1",
+        base_df = pl.concat(
+            [
+                store.read_dir(paths.built_bars_dir("XAUUSD", "M1", dt.date(2026, 4, 1))),
+                store.read_dir(paths.built_bars_dir("XAUUSD", "M1", dt.date(2026, 4, 2))),
+            ],
+            how="diagonal_relaxed",
+        ).sort("time_utc")
+        state_artifact_id, state_manifest, _ = _register_state_artifact(
+            paths=paths,
+            store=store,
+            catalog=catalog,
+            base_df=base_df,
             state_version_ref="state.default@1.0.0",
             date_from=dt.date(2026, 4, 1),
             date_to=dt.date(2026, 4, 2),
             build_id="build.phase3.reject",
             dataset_spec_ref="fixture.nonhuman.reject@1.0.0",
-            code_version="workspace-local-no-git",
-            merge_config_ref="merge.default@test",
         )
 
         feature_artifact_refs: list[str] = []
         for spec in _phase3_feature_specs():
-            frame = _build_phase3_feature_frame(state_result.base_df, spec)
+            frame = _build_phase3_feature_frame(base_df, spec)
             if spec.family == "entropy":
                 frame = frame.drop("entropy_sign_30")
             feature_artifact_refs.append(
@@ -616,8 +767,8 @@ def test_compile_phase3_rejects_when_artifact_backed_family_is_incomplete(tmp_pa
                     catalog=catalog,
                     spec=spec,
                     frame=frame,
-                    state_artifact_id=state_result.artifact_id,
-                    input_partition_refs=state_result.manifest.input_partition_refs,
+                    state_artifact_id=state_artifact_id,
+                    input_partition_refs=state_manifest.input_partition_refs,
                 )
             )
     finally:
@@ -640,7 +791,7 @@ def test_compile_phase3_rejects_when_artifact_backed_family_is_incomplete(tmp_pa
         date_from="2026-04-01",
         date_to="2026-04-02",
         state_version_ref=None,
-        state_artifact_ref=state_result.artifact_id,
+        state_artifact_ref=state_artifact_id,
         feature_artifact_refs=feature_artifact_refs,
     )
 

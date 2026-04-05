@@ -100,10 +100,8 @@ def test_event_shape_builder_outputs_registered_columns_and_warmup() -> None:
 
     for column in spec.output_columns:
         assert column in result.columns
-    assert result["burstiness_20"][:19].is_null().all()
-    assert result["silence_ratio_20"][:19].is_null().all()
-    assert result["direction_switch_rate_20"][:19].is_null().all()
-    assert result["signed_run_length"].null_count() == 0
+        assert result[column][:19].is_null().all()
+    assert result["signed_run_length"][30] is not None
 
 
 def test_entropy_builder_outputs_registered_columns_and_warmup() -> None:

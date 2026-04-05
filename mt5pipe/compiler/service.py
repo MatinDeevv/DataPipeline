@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 from dataclasses import dataclass, field
+from importlib import import_module
 from pathlib import Path
 
 import polars as pl
@@ -15,6 +16,8 @@ from mt5pipe.compiler.manifest import (
     build_artifact_id,
     build_id_now,
     build_manifest_id,
+    build_stage_artifact_id,
+    build_stage_manifest_id,
     code_version,
     compute_content_hash,
     load_dataset_spec,
@@ -33,7 +36,6 @@ from mt5pipe.config.loader import load_config
 from mt5pipe.config.models import PipelineConfig
 from mt5pipe.features.public import FeatureService, FeatureSpec, LabelPack, LabelService
 from mt5pipe.quality.cleaning import clean_dataset
-from mt5pipe.state.public import StateService
 from mt5pipe.storage.parquet_store import ParquetStore
 from mt5pipe.storage.paths import StoragePaths
 from mt5pipe.truth.models import TrustReport
@@ -104,6 +106,10 @@ class ArtifactInspection:
     split_row_counts: dict[str, int]
     schema_columns: list[str]
     trust_score_breakdown: dict[str, float | None]
+    trust_decision_summary: str
+    trust_rejection_reasons: list[str]
+    trust_warning_reasons: list[str]
+    trust_check_status_counts: dict[str, int]
     lineage_refs: dict[str, list[str]]
     requested_feature_selectors: list[str]
     build_row_stats: dict[str, int]
@@ -168,10 +174,19 @@ class DatasetCompiler:
         self._store = store
         self._catalog = catalog
         self._truth = TruthService()
-        self._state = StateService(paths, store, catalog)
+        self._state, self._state_boot_error = self._build_state_service(paths, store, catalog)
         self._features = FeatureService(paths, store, catalog, cfg.dataset)
         self._labels = LabelService(paths, store, catalog)
         register_builtin_contracts(self._catalog)
+
+    @staticmethod
+    def _build_state_service(paths: StoragePaths, store: ParquetStore, catalog: CatalogDB) -> tuple[object | None, Exception | None]:
+        try:
+            state_public = import_module("mt5pipe.state.public")
+            state_service_cls = getattr(state_public, "StateService")
+            return state_service_cls(paths, store, catalog), None
+        except Exception as exc:  # pragma: no cover - exercised through compiler tests when state sector is broken
+            return None, exc
 
     @classmethod
     def from_config_path(cls, config_path: str | Path | None = None) -> tuple["DatasetCompiler", CatalogDB]:
@@ -440,6 +455,10 @@ class DatasetCompiler:
             "source_quality": trust_report.source_quality_score if trust_report else None,
             "lineage": trust_report.lineage_score if trust_report else None,
         }
+        trust_decision_summary = trust_report.decision_summary if trust_report else ""
+        trust_rejection_reasons = list(trust_report.rejection_reasons) if trust_report else []
+        trust_warning_reasons = list(trust_report.warning_reasons) if trust_report else []
+        trust_check_status_counts = dict(trust_report.check_status_counts) if trust_report else {}
         lineage_refs = {
             "input_partition_refs": list(manifest.input_partition_refs),
             "state_artifact_refs": list(manifest.state_artifact_refs),
@@ -464,6 +483,10 @@ class DatasetCompiler:
             split_row_counts=split_row_counts,
             schema_columns=schema_columns,
             trust_score_breakdown=trust_score_breakdown,
+            trust_decision_summary=trust_decision_summary,
+            trust_rejection_reasons=trust_rejection_reasons,
+            trust_warning_reasons=trust_warning_reasons,
+            trust_check_status_counts=trust_check_status_counts,
             lineage_refs=lineage_refs,
             requested_feature_selectors=[str(item) for item in manifest.metadata.get("requested_feature_selectors", [])],
             build_row_stats={str(key): int(value) for key, value in dict(manifest.metadata.get("build_row_stats", {})).items()},
@@ -517,6 +540,14 @@ class DatasetCompiler:
             "source_modes_right": right.source_modes,
             "trust_score_left": left.trust_score_breakdown,
             "trust_score_right": right.trust_score_breakdown,
+            "trust_decision_left": left.trust_decision_summary,
+            "trust_decision_right": right.trust_decision_summary,
+            "trust_rejection_reasons_added": sorted(set(right.trust_rejection_reasons) - set(left.trust_rejection_reasons)),
+            "trust_rejection_reasons_removed": sorted(set(left.trust_rejection_reasons) - set(right.trust_rejection_reasons)),
+            "trust_warning_reasons_added": sorted(set(right.trust_warning_reasons) - set(left.trust_warning_reasons)),
+            "trust_warning_reasons_removed": sorted(set(left.trust_warning_reasons) - set(right.trust_warning_reasons)),
+            "trust_check_status_counts_left": left.trust_check_status_counts,
+            "trust_check_status_counts_right": right.trust_check_status_counts,
             "lineage_inputs_added": sorted(lineage_right - lineage_left),
             "lineage_inputs_removed": sorted(lineage_left - lineage_right),
             "state_artifact_refs_left": left.manifest.state_artifact_refs,
@@ -572,17 +603,49 @@ class DatasetCompiler:
                 source_mode="artifact_ref",
             )
 
-        state_result = self._state.materialize_state(
-            symbol=symbol,
-            clock=spec.base_clock,
-            state_version_ref=spec.state_version_ref or "",
-            date_from=spec.date_from,
-            date_to=spec.date_to,
-            build_id=build_id,
-            dataset_spec_ref=spec.key,
-            code_version=code_version_value,
-            merge_config_ref=merge_config_ref_value,
-        )
+        state_result = None
+        materialization_error: Exception | None = None
+        if self._state is not None:
+            try:
+                state_result = self._state.materialize_state(
+                    symbol=symbol,
+                    clock=spec.base_clock,
+                    state_version_ref=spec.state_version_ref or "",
+                    date_from=spec.date_from,
+                    date_to=spec.date_to,
+                    build_id=build_id,
+                    dataset_spec_ref=spec.key,
+                    code_version=code_version_value,
+                    merge_config_ref=merge_config_ref_value,
+                )
+            except Exception as exc:
+                materialization_error = exc
+        else:
+            materialization_error = self._state_boot_error
+
+        if state_result is None:
+            recovered = self._recover_state_input_from_storage(
+                spec=spec,
+                symbol=symbol,
+                build_id=build_id,
+                code_version_value=code_version_value,
+                merge_config_ref_value=merge_config_ref_value,
+                materialization_error=materialization_error,
+            )
+            if recovered is not None:
+                return recovered
+
+            if materialization_error is None:
+                raise FileNotFoundError(
+                    f"No compiler-visible state artifact was available for symbol={symbol} "
+                    f"clock={spec.base_clock} range={spec.date_from.isoformat()}..{spec.date_to.isoformat()} "
+                    f"and state version '{spec.state_version_ref}'."
+                )
+            raise RuntimeError(
+                "Unable to materialize state through the public state boundary and no reusable "
+                f"state parquet payload was found for compiler recovery: {materialization_error}"
+            ) from materialization_error
+
         return ResolvedStateInput(
             artifact_id=getattr(state_result, "artifact_id"),
             manifest=getattr(state_result, "manifest"),
@@ -595,6 +658,171 @@ class DatasetCompiler:
             ),
             source_mode="materialized",
         )
+
+    def _recover_state_input_from_storage(
+        self,
+        *,
+        spec: DatasetSpec,
+        symbol: str,
+        build_id: str,
+        code_version_value: str,
+        merge_config_ref_value: str,
+        materialization_error: Exception | None,
+    ) -> ResolvedStateInput | None:
+        state_version_ref = spec.state_version_ref or ""
+        if not state_version_ref:
+            return None
+
+        state_root = self._paths.state_root(symbol, spec.base_clock, state_version_ref)
+        state_df = self._store.read_dir(state_root)
+        if state_df.is_empty():
+            return None
+
+        state_dedup_keys = [column for column in ["symbol", "clock", "ts_utc", "ts_msc"] if column in state_df.columns]
+        if state_dedup_keys:
+            state_df = state_df.unique(subset=state_dedup_keys, keep="last")
+        state_df = _filter_frame_to_range(
+            state_df,
+            time_col="ts_utc",
+            symbol=symbol,
+            clock=spec.base_clock,
+            date_from=spec.date_from,
+            date_to=spec.date_to,
+        )
+        if state_df.is_empty():
+            return None
+
+        input_partition_refs = self._collect_built_bar_partition_refs(
+            symbol=symbol,
+            clock=spec.base_clock,
+            date_from=spec.date_from,
+            date_to=spec.date_to,
+        )
+        if not input_partition_refs:
+            return None
+
+        base_df = self._load_base_df_from_partition_refs(
+            partition_refs=input_partition_refs,
+            symbol=symbol,
+            base_clock=spec.base_clock,
+            date_from=spec.date_from,
+            date_to=spec.date_to,
+        )
+        if base_df.is_empty():
+            return None
+        base_df = self._augment_base_df_with_state_controls(
+            base_df=base_df,
+            state_df=state_df,
+            base_clock=spec.base_clock,
+        )
+
+        created_at = dt.datetime.now(dt.timezone.utc)
+        logical_name = f"{symbol}.{spec.base_clock}"
+        content_hash = compute_content_hash(
+            {
+                "artifact_kind": "state",
+                "logical_name": logical_name,
+                "logical_version": state_version_ref,
+                "symbol": symbol,
+                "clock": spec.base_clock,
+                "rows": len(state_df),
+                "columns": state_df.columns,
+                "time_range_start": str(state_df["ts_utc"].min()) if not state_df.is_empty() else "",
+                "time_range_end": str(state_df["ts_utc"].max()) if not state_df.is_empty() else "",
+                "input_partition_refs": input_partition_refs,
+            }
+        )
+        artifact_id = build_stage_artifact_id("state", logical_name, created_at, content_hash)
+        manifest = LineageManifest(
+            manifest_id=build_stage_manifest_id("state", logical_name, created_at, content_hash),
+            artifact_id=artifact_id,
+            artifact_kind="state",
+            logical_name=logical_name,
+            logical_version=state_version_ref,
+            artifact_uri=str(state_root),
+            content_hash=content_hash,
+            build_id=build_id,
+            created_at=created_at,
+            status="accepted",
+            dataset_spec_ref=spec.key,
+            state_artifact_refs=[],
+            feature_spec_refs=[],
+            label_pack_ref=None,
+            truth_report_ref=None,
+            code_version=code_version_value,
+            merge_config_ref=merge_config_ref_value,
+            input_partition_refs=input_partition_refs,
+            parent_artifact_refs=[],
+            metadata={
+                "row_count": len(state_df),
+                "column_count": len(state_df.columns),
+                "time_range_start": str(state_df["ts_utc"].min()) if not state_df.is_empty() else "",
+                "time_range_end": str(state_df["ts_utc"].max()) if not state_df.is_empty() else "",
+                "symbol": symbol,
+                "clock": spec.base_clock,
+                "recovered_via_compiler_state_storage_fallback": True,
+                "state_materialization_error": str(materialization_error) if materialization_error is not None else "",
+            },
+        )
+        manifest_path = write_manifest_sidecar(manifest, self._paths)
+        self._ensure_artifact_registered(
+            manifest,
+            manifest_path,
+            detail="recovered compiler-visible state artifact after public state materialization validation failure",
+        )
+        return ResolvedStateInput(
+            artifact_id=artifact_id,
+            manifest=manifest,
+            manifest_path=manifest_path,
+            state_df=state_df,
+            base_df=base_df,
+            source_mode="materialized",
+        )
+
+    def _collect_built_bar_partition_refs(
+        self,
+        *,
+        symbol: str,
+        clock: str,
+        date_from: dt.date,
+        date_to: dt.date,
+    ) -> list[str]:
+        refs: list[str] = []
+        current = date_from
+        while current <= date_to:
+            partition_dir = self._paths.built_bars_dir(symbol, clock, current)
+            if partition_dir.exists():
+                refs.append(str(partition_dir))
+            current += dt.timedelta(days=1)
+        return refs
+
+    def _load_base_df_from_partition_refs(
+        self,
+        *,
+        partition_refs: list[str],
+        symbol: str,
+        base_clock: str,
+        date_from: dt.date,
+        date_to: dt.date,
+    ) -> pl.DataFrame:
+        frames: list[pl.DataFrame] = []
+        for ref in partition_refs:
+            frame = self._store.read_dir(Path(ref))
+            if frame.is_empty():
+                continue
+            frames.append(
+                _filter_frame_to_range(
+                    frame,
+                    time_col="time_utc",
+                    symbol=symbol,
+                    clock=base_clock,
+                    date_from=date_from,
+                    date_to=date_to,
+                )
+            )
+        if not frames:
+            return pl.DataFrame()
+        return pl.concat(frames, how="diagonal_relaxed").sort("time_utc")
 
     def _augment_base_df_with_state_controls(
         self,

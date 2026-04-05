@@ -10,7 +10,7 @@ from mt5pipe.contracts import StateArtifactRef, StateWindowArtifactRef, StateWin
 from mt5pipe.compiler.models import DatasetSpec, LineageManifest
 from mt5pipe.features.registry.models import FeatureSpec
 from mt5pipe.labels.registry.models import LabelPack
-from mt5pipe.state.models import StateSnapshot, StateWindowRecord
+from mt5pipe.state.models import StateCoverageSummary, StateSnapshot, StateSourceQualitySummary, StateWindowRecord
 from mt5pipe.truth.models import QaCheckResult, TrustReport
 
 
@@ -35,7 +35,12 @@ def test_state_snapshot_validates_core_invariants() -> None:
         source_count=2,
         merge_mode="best",
         conflict_flag=False,
+        expected_interval_ms=60_000,
+        observed_interval_ms=0,
         quality_score=92.0,
+        source_quality_hint=92.0,
+        source_participation_score=0.95,
+        overlap_confidence_hint=0.93,
         session_code="asia",
         provenance_refs=["canonical://XAUUSD/2026-04-01"],
     )
@@ -107,14 +112,25 @@ def test_state_window_record_validates_machine_native_series_alignment() -> None
         row_count=5,
         expected_row_count=5,
         missing_row_count=0,
+        warmup_missing_rows=0,
+        warmup_satisfied=True,
         completeness=1.0,
+        coverage_mode="regular_clock",
+        observed_span_ms=240_000,
         source_count_mean=1.8,
         dual_source_ratio_window=0.8,
         quality_score_mean=90.0,
+        source_quality_hint_mean=90.0,
+        source_participation_score_mean=0.82,
+        overlap_confidence_mean=0.79,
         conflict_count_window=1,
         conflict_ratio=0.2,
         disagreement_bps_mean=0.5,
         staleness_ms_max=60_000,
+        filled_row_count=0,
+        filled_ratio=0.0,
+        gap_count=0,
+        max_gap_ms=0,
         mid_values=[1.0, 1.1, 1.2, 1.3, 1.4],
         spread_values=[0.1, 0.1, 0.1, 0.1, 0.1],
         mid_return_bps_values=[0.0, 10.0, 10.0, 10.0, 10.0],
@@ -142,7 +158,11 @@ def test_state_window_record_validates_machine_native_series_alignment() -> None
             row_count=2,
             expected_row_count=5,
             missing_row_count=3,
+            warmup_missing_rows=3,
+            warmup_satisfied=False,
             completeness=0.4,
+            coverage_mode="regular_clock",
+            observed_span_ms=60_000,
             source_count_mean=1.0,
             dual_source_ratio_window=0.0,
             quality_score_mean=90.0,
@@ -159,6 +179,40 @@ def test_state_window_record_validates_machine_native_series_alignment() -> None
             source_offset_ms_values=[None, None],
             provenance_refs=["state://XAUUSD/M1"],
         )
+
+
+def test_state_coverage_and_source_quality_summaries_validate() -> None:
+    coverage = StateCoverageSummary(
+        coverage_mode="regular_clock",
+        resolution_ms=60_000,
+        row_count=10,
+        expected_rows=12,
+        missing_rows=2,
+        completeness_ratio=10 / 12,
+        filled_row_count=2,
+        filled_ratio=0.2,
+        gap_count=1,
+        max_gap_ms=120_000,
+        observed_span_ms=540_000,
+        time_range_start_utc=dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC),
+        time_range_end_utc=dt.datetime(2026, 4, 1, 0, 9, tzinfo=UTC),
+    )
+    source = StateSourceQualitySummary(
+        mean_source_count=1.7,
+        dual_source_ratio=0.7,
+        conflict_ratio=0.1,
+        mean_quality_score=88.0,
+        min_quality_score=50.0,
+        mean_source_quality_hint=80.0,
+        mean_source_participation_score=0.72,
+        mean_overlap_confidence=0.66,
+        median_primary_staleness_ms=60_000,
+        p95_primary_staleness_ms=120_000,
+        max_primary_staleness_ms=180_000,
+    )
+
+    assert coverage.gap_count == 1
+    assert source.dual_source_ratio == 0.7
 
 
 def test_feature_spec_requires_unique_output_columns() -> None:

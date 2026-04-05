@@ -58,3 +58,20 @@ files: mt5pipe/features/public.py, mt5pipe/features/service.py, mt5pipe/features
 selector-notes: disagreement.microstructure_pressure@1.0.0 -> outputs mid_divergence_proxy_bps, spread_divergence_proxy_bps, disagreement_pressure_bps, disagreement_zscore_60, conflict_burst_15, disagreement_burst_15, staleness_asymmetry_15, disagreement_entropy_30; event_shape.flow_shape@1.0.0 -> outputs tick_rate_hz, interarrival_mean_ms, burstiness_20, silence_ratio_20, direction_switch_rate_20, signed_run_length, path_efficiency_20, tortuosity_20; entropy.market_complexity@1.0.0 -> outputs return_sign_shannon_entropy_30, return_permutation_entropy_30, return_sample_entropy_30, volatility_approx_entropy_30.
 blocker: tests/test_compiler.py and tests/test_boundary_imports.py::test_public_modules_importable are blocked by missing mt5pipe.compiler.service in the current tree, not by feature-sector failures.
 
+[2026-04-04T21:25:36.4537479-04:00]
+agent: agent_2
+feedback_read: yes
+feedback_source: feedbacks/latest.md
+feedback_summary: Freeze the working Phase 3 boundaries, harden the nonhuman dataset path, and expand features in a controlled way. For Agent 2 specifically: improve registry quality, PIT safety, family-level tests, and label maturity without exploding feature scope.
+phase: Phase 4
+area: features|labels
+
+[2026-04-04T21:37:37.2561916-04:00]
+agent: agent_2
+area: features|labels
+summary: hardened disagreement/*, event_shape/*, and entropy/* so all family outputs stay null through warmup and degrade to typed-null columns when core inputs are missing; added one new stable family multiscale/*.
+update: multiscale.consistency@1.0.0 is registered and exported via features.public as add_multiscale_features; selector outputs are trend_alignment_5_15_60, return_energy_ratio_5_60, volatility_ratio_5_60, range_expansion_ratio_15_60, tick_intensity_ratio_5_60.
+update: triple_barrier_* now returns null when the forward horizon is unavailable and treats the horizon endpoint as included; label manifests now carry compact horizon/class-balance diagnostics plus exclusions metadata.
+tests: pytest tests/test_features_phase3.py tests/test_features_phase4.py tests/test_labels.py tests/test_compiler.py tests/test_boundary_imports.py tests/test_truth_core.py -q; pytest tests/test_contracts.py -q
+result: 54 passed, 1 xfailed
+

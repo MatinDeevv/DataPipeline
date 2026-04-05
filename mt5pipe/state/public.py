@@ -11,12 +11,19 @@ from mt5pipe.contracts.state import (
     TickArtifactRef,
     parse_window_size,
 )
-from mt5pipe.state.models import StateArtifactManifest, StateSnapshot, StateWindowRecord
+from mt5pipe.state.models import (
+    StateArtifactManifest,
+    StateCoverageSummary,
+    StateSnapshot,
+    StateSourceQualitySummary,
+    StateWindowRecord,
+)
 from mt5pipe.state.service import (
     StateMaterializationResult,
     StateService,
     StateWindowMaterializationResult,
     load_state_artifact,
+    load_state_window_artifact,
     materialize_state_windows,
 )
 
@@ -26,15 +33,18 @@ __all__ = [
     "StateArtifactManifest",
     "StateArtifactRef",
     "StateBuilder",
+    "StateCoverageSummary",
     "StateMaterializationResult",
     "StateService",
     "StateSnapshot",
+    "StateSourceQualitySummary",
     "StateWindowArtifactRef",
     "StateWindowMaterializationResult",
     "StateWindowRecord",
     "StateWindowRequest",
     "TickArtifactRef",
     "load_state_artifact",
+    "load_state_window_artifact",
     "materialize_state_windows",
     "parse_window_size",
 ]

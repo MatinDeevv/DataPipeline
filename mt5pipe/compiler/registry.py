@@ -13,8 +13,8 @@ from __future__ import annotations
 from fnmatch import fnmatch
 
 from mt5pipe.catalog.sqlite import CatalogDB
-from mt5pipe.features.public import FeatureSpec
-from mt5pipe.labels.public import LabelPack
+from mt5pipe.features.public import FeatureSpec, get_default_feature_specs
+from mt5pipe.labels.public import LabelPack, get_default_label_packs
 
 
 def builtin_feature_specs() -> list[FeatureSpec]:
@@ -25,6 +25,14 @@ def builtin_feature_specs() -> list[FeatureSpec]:
     families should be registered in the catalog by their producer and will be
     picked up automatically by the resolver below.
     """
+
+    public_stable_specs = [
+        spec
+        for spec in get_default_feature_specs()
+        if getattr(spec, "status", "stable") == "stable"
+    ]
+    if public_stable_specs:
+        return public_stable_specs
 
     return [
         FeatureSpec(
@@ -102,6 +110,14 @@ def builtin_feature_specs() -> list[FeatureSpec]:
 
 def builtin_label_packs() -> list[LabelPack]:
     """Return compiler-known stable label packs."""
+
+    public_stable_packs = [
+        pack
+        for pack in get_default_label_packs()
+        if getattr(pack, "status", "stable") == "stable"
+    ]
+    if public_stable_packs:
+        return public_stable_packs
 
     horizons = [5, 15, 60, 240]
     output_columns: list[str] = []
@@ -182,10 +198,14 @@ def resolve_feature_selectors(
                     seen.add(spec.key)
 
         if not matched:
+            visible_selectors = sorted({spec.key for spec in candidates.values()})
+            visible_families = sorted({spec.family for spec in candidates.values()})
             raise KeyError(
                 "Feature selector "
                 f"'{current}' did not match any registered feature spec. "
-                "Register the feature contract in the compiler catalog or use a compiler-known stable selector."
+                "Register the feature contract in the compiler catalog or use a compiler-known stable selector. "
+                f"Visible families: {', '.join(visible_families)}. "
+                f"Visible specs: {', '.join(visible_selectors)}."
             )
 
     return resolved

@@ -10,11 +10,14 @@ from mt5pipe.contracts.artifacts import ArtifactKind
 from mt5pipe.contracts.state import StateWindowRequest, TickArtifactRef
 from mt5pipe.state.public import (
     StateArtifactRef,
+    StateCoverageSummary,
     StateService,
     StateSnapshot,
+    StateSourceQualitySummary,
     StateWindowArtifactRef,
     StateWindowRecord,
     load_state_artifact,
+    load_state_window_artifact,
     materialize_state_windows,
 )
 
@@ -81,6 +84,9 @@ def test_tick_state_materialization_builds_disagreement_and_staleness(paths, sto
     assert result.state_df["primary_staleness_ms"].to_list() == [0, 10_000, 10_000, 10_000]
     assert result.state_df["disagreement_bps"].drop_nulls().len() == 4
     assert result.state_df["conflict_flag"].to_list() == [False, False, True, False]
+    assert result.state_df["source_participation_score"].drop_nulls().len() == 4
+    assert result.coverage_summary.coverage_mode == "activity_clock"
+    assert result.source_quality_summary.conflict_ratio == 0.25
 
     loaded = load_state_artifact(paths, store, result.ref)
     assert loaded.height == 4
@@ -91,6 +97,7 @@ def test_state_window_materialization_is_pit_safe_and_persisted(paths, store) ->
     service = StateService(paths, store)
     start = dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC)
     bars = _bars(start, 6)
+    bars = bars.filter(pl.col("time_utc") != (start + dt.timedelta(minutes=3)))
     store.write(bars, paths.built_bars_file("XAUUSD", "M1", start.date()))
 
     state_result = service.materialize_state(
@@ -122,25 +129,61 @@ def test_state_window_materialization_is_pit_safe_and_persisted(paths, store) ->
 
     window_result = windows["5m"]
     assert isinstance(window_result.ref, StateWindowArtifactRef)
+    assert window_result.coverage_summary.coverage_mode == "regular_clock"
     assert window_result.window_df.height == 2
     assert window_result.window_df["anchor_ts_utc"].to_list()[0] == start + dt.timedelta(minutes=4)
 
     second_window = window_result.window_df.row(1, named=True)
     assert second_window["row_count"] == 5
-    assert second_window["mid_values"] == [3001.2, 3002.2, 3003.2, 3004.2, 3005.2]
+    assert second_window["warmup_satisfied"] is True
+    assert second_window["gap_count"] == 1
+    assert second_window["filled_row_count"] == 1
+    assert second_window["mid_values"] == [3001.2, 3002.2, 3002.2, 3004.2, 3005.2]
     assert second_window["conflict_count_window"] == 1
 
-    loaded = service.load_state_window_artifact(window_result.ref)
+    loaded = load_state_window_artifact(paths, store, window_result.ref)
     assert loaded.height == 2
     assert loaded["window_size"].unique().to_list() == ["5m"]
+    assert loaded["filled_ratio"].max() > 0.0
+
+
+def test_state_manifest_contains_coverage_and_source_quality_metadata(paths, store) -> None:
+    service = StateService(paths, store)
+    start = dt.datetime(2026, 4, 1, 0, 0, tzinfo=UTC)
+    bars = _bars(start, 6).filter(pl.col("time_utc") != (start + dt.timedelta(minutes=2)))
+    store.write(bars, paths.built_bars_file("XAUUSD", "M1", start.date()))
+
+    result = service.materialize_state(
+        symbol="XAUUSD",
+        clock="M1",
+        state_version_ref="state.default@1.0.0",
+        date_from=start.date(),
+        date_to=start.date(),
+        build_id="state.test.build",
+        dataset_spec_ref="dataset.test@1.0.0",
+        code_version="workspace-local-no-git",
+        merge_config_ref="merge.default@test",
+    )
+
+    manifest = result.manifest
+    assert isinstance(manifest.coverage_summary, StateCoverageSummary)
+    assert isinstance(manifest.source_quality_summary, StateSourceQualitySummary)
+    assert manifest.coverage_summary.filled_row_count == 1
+    assert manifest.coverage_summary.gap_count == 1
+    assert manifest.source_quality_summary.mean_source_count < 2.0
+    assert manifest.clock == "M1"
+    assert manifest.symbol == "XAUUSD"
+    assert manifest.time_range_start_utc == result.coverage_summary.time_range_start_utc
 
 
 def test_state_public_boundary_exports_are_available() -> None:
     assert StateSnapshot is not None
     assert StateArtifactRef is not None
+    assert StateCoverageSummary is not None
     assert StateWindowArtifactRef is not None
     assert StateWindowRecord is not None
     assert StateService is not None
+    assert StateSourceQualitySummary is not None
 
     tick_ref = TickArtifactRef(
         artifact_id="canonical_tick.XAUUSD.abc",

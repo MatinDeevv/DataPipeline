@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
@@ -107,6 +108,8 @@ class LabelService:
                 "column_count": len(label_df.columns),
                 "output_columns": label_pack.output_columns,
                 "purge_rows": label_pack.purge_rows,
+                "exclusions": label_pack.exclusions,
+                "label_diagnostics": _label_manifest_diagnostics(label_df, label_pack),
                 "time_range_start": str(label_df["time_utc"].min()) if not label_df.is_empty() else "",
                 "time_range_end": str(label_df["time_utc"].max()) if not label_df.is_empty() else "",
             },
@@ -162,3 +165,58 @@ class LabelService:
         for date_val in dated["_date"].unique().sort().to_list():
             day_df = dated.filter(pl.col("_date") == date_val).drop("_date")
             self._store.write(day_df, self._paths.label_view_file(label_pack.key, label_pack.base_clock, date_val))
+
+
+def _label_manifest_diagnostics(label_df: pl.DataFrame, label_pack: LabelPack) -> dict[str, Any]:
+    """Build compact horizon-level diagnostics for manifest metadata."""
+    horizon_summaries: dict[str, dict[str, Any]] = {}
+
+    for horizon in label_pack.horizons_minutes:
+        suffix = f"{horizon}m"
+        future_col = f"future_return_{suffix}"
+        direction_col = f"direction_{suffix}"
+        tb_col = f"triple_barrier_{suffix}"
+
+        direction_balance = _class_balance(label_df, direction_col)
+        tb_balance = _class_balance(label_df, tb_col)
+        horizon_summaries[suffix] = {
+            "expected_tail_null_rows": min(horizon, label_df.height),
+            "future_return_null_rows": _null_count(label_df, future_col),
+            "direction_null_rows": _null_count(label_df, direction_col),
+            "triple_barrier_null_rows": _null_count(label_df, tb_col),
+            "direction_class_balance": direction_balance,
+            "triple_barrier_class_balance": tb_balance,
+            "triple_barrier_hit_rate": _hit_rate(tb_balance),
+        }
+
+    return {
+        "base_clock": label_pack.base_clock,
+        "purge_rows": label_pack.purge_rows,
+        "exclusions": label_pack.exclusions,
+        "horizon_summaries": horizon_summaries,
+    }
+
+
+def _null_count(label_df: pl.DataFrame, column: str) -> int:
+    if column not in label_df.columns:
+        return label_df.height
+    return int(label_df[column].null_count())
+
+
+def _class_balance(label_df: pl.DataFrame, column: str) -> dict[str, int]:
+    if column not in label_df.columns:
+        return {"-1": 0, "0": 0, "1": 0}
+
+    non_null = label_df[column].drop_nulls().to_list()
+    return {
+        "-1": int(sum(1 for value in non_null if value == -1)),
+        "0": int(sum(1 for value in non_null if value == 0)),
+        "1": int(sum(1 for value in non_null if value == 1)),
+    }
+
+
+def _hit_rate(class_balance: dict[str, int]) -> float | None:
+    total = sum(class_balance.values())
+    if total <= 0:
+        return None
+    return round((class_balance["-1"] + class_balance["1"]) / total, 6)

@@ -24,6 +24,7 @@ from mt5pipe.features.context import add_lagged_bar_features
 from mt5pipe.features.disagreement import add_disagreement_features
 from mt5pipe.features.entropy import add_entropy_features
 from mt5pipe.features.event_shape import add_event_shape_features
+from mt5pipe.features.multiscale import add_multiscale_features
 from mt5pipe.features.quality import add_spread_quality_features
 from mt5pipe.features.registry.models import FeatureSpec
 from mt5pipe.features.session import add_session_features
@@ -257,6 +258,7 @@ def _family_builder(family: str):
         "disagreement": add_disagreement_features,
         "event_shape": add_event_shape_features,
         "entropy": add_entropy_features,
+        "multiscale": add_multiscale_features,
     }
     try:
         return builders[family]
