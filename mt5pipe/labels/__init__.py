@@ -1,13 +1,7 @@
-"""Labels sector public surface.
+"""Labels sector package.
 
-For cross-sector imports, prefer ``mt5pipe.labels.public``.
-This file exposes models for intra-package convenience.
-
-Note: LabelService is NOT exported here to avoid circular imports
-(labels.service → catalog.sqlite → features.registry.models).
-Import LabelService from ``mt5pipe.labels.public`` or directly.
+Cross-sector imports must use ``mt5pipe.labels.public``.
+This package root intentionally exposes no boundary symbols.
 """
 
-from mt5pipe.labels.registry.models import LabelPack
-
-__all__ = ["LabelPack"]
+__all__: list[str] = []

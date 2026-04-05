@@ -6,7 +6,14 @@ Target rule (from docs/parallel_dev_architecture.md):
         - mt5pipe.contracts.*
         - mt5pipe.state.public
         - mt5pipe.features.public
+        - mt5pipe.labels.public
         - mt5pipe.compiler.public
+
+    Cross-sector imports must NOT use sector package roots:
+        - mt5pipe.state
+        - mt5pipe.features
+        - mt5pipe.labels
+        - mt5pipe.compiler
 
 Sector ownership:
     state    → mt5pipe/state/
@@ -79,6 +86,14 @@ NEUTRAL_PREFIXES: list[str] = [
 
 
 class ImportViolation(NamedTuple):
+    file: str
+    line: int
+    source_sector: str
+    target_module: str
+    target_sector: str
+
+
+class RootImportViolation(NamedTuple):
     file: str
     line: int
     source_sector: str
@@ -186,6 +201,43 @@ def scan_boundary_violations() -> list[ImportViolation]:
     return violations
 
 
+def scan_cross_sector_root_import_violations() -> list[RootImportViolation]:
+    """
+    Walk all Python files in mt5pipe/ and flag cross-sector imports that
+    target sector package roots (e.g., ``mt5pipe.state`` instead of
+    ``mt5pipe.state.public``).
+    """
+    sector_roots = {"mt5pipe.state", "mt5pipe.features", "mt5pipe.labels", "mt5pipe.compiler"}
+    violations: list[RootImportViolation] = []
+
+    for py_file in _find_python_files(MT5PIPE):
+        source_module = _module_path_of(py_file)
+        source_sector = _sector_of(source_module)
+
+        if source_sector is None:
+            continue
+
+        for lineno, target in _collect_imports(py_file):
+            if target not in sector_roots:
+                continue
+
+            target_sector = _sector_of(target)
+            if target_sector is None or target_sector == source_sector:
+                continue
+
+            violations.append(
+                RootImportViolation(
+                    file=str(py_file.relative_to(REPO_ROOT)),
+                    line=lineno,
+                    source_sector=source_sector,
+                    target_module=target,
+                    target_sector=target_sector,
+                )
+            )
+
+    return violations
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -259,3 +311,16 @@ class TestBoundaryEnforcement:
         assert isinstance(violations, list)
         # Report count for visibility
         print(f"\n[boundary] Found {len(violations)} cross-sector import violation(s)")
+
+    def test_no_cross_sector_root_imports(self):
+        """Cross-sector imports must not target sector package roots."""
+        violations = scan_cross_sector_root_import_violations()
+        if violations:
+            msg_lines = ["Cross-sector root import violations found:\n"]
+            for v in violations:
+                msg_lines.append(
+                    f"  {v.file}:{v.line}  "
+                    f"[{v.source_sector}] imports {v.target_module} "
+                    f"(owned by [{v.target_sector}]); use <sector>.public instead"
+                )
+            pytest.fail("\n".join(msg_lines))
