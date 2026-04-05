@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 from pathlib import Path
+import sqlite3
 
 import polars as pl
 import pytest
@@ -256,6 +258,22 @@ def _write_project_config(project_root: Path, storage_root: Path) -> Path:
         encoding="utf-8",
     )
     return config_path
+
+
+def _rewrite_artifact_manifest_to_relative(project_root: Path, artifact_id: str, manifest_path: Path) -> None:
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    artifact_uri = Path(str(payload["artifact_uri"]))
+    if artifact_uri.is_absolute():
+        payload["artifact_uri"] = str(artifact_uri.relative_to(project_root))
+    manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    catalog_path = project_root / "local_data" / "pipeline_data" / "catalog" / "catalog.db"
+    with sqlite3.connect(catalog_path) as conn:
+        conn.execute(
+            "UPDATE artifacts SET manifest_uri = ? WHERE artifact_id = ?",
+            (str(manifest_path.relative_to(project_root)), artifact_id),
+        )
+        conn.commit()
 
 
 def _write_spec(
@@ -610,6 +628,41 @@ def test_compile_dataset_spec_builds_real_artifact_and_supports_inspect_diff(tmp
     assert "htf_context.standard_context@1.0.0" in diff.diff["feature_spec_refs_removed"]
     assert "H1_open" in diff.diff["schema_columns_removed"]
     assert diff.diff["label_pack_changed"] is False
+
+
+def test_inspect_artifact_supports_external_cwd_with_env_config_and_relative_manifest_paths(tmp_path, monkeypatch) -> None:
+    project_root = tmp_path / "project_external_inspect"
+    storage_root = project_root / "local_data" / "pipeline_data"
+    storage_root.mkdir(parents=True, exist_ok=True)
+    _seed_project_data(storage_root, start_date=dt.date(2026, 4, 1), days=4)
+    config_path = _write_project_config(project_root, storage_root)
+
+    spec_path = project_root / "config" / "datasets" / "xau_m1_core_v1.yaml"
+    _write_spec(
+        spec_path,
+        version="1.0.0",
+        selectors=["time/*", "session/*", "quality/*", "htf_context/*"],
+        date_from="2026-04-01",
+        date_to="2026-04-04",
+    )
+
+    monkeypatch.chdir(project_root)
+    result = compile_dataset_spec(spec_path)
+    assert result.manifest.status == "published"
+
+    _rewrite_artifact_manifest_to_relative(project_root, result.artifact_id, result.manifest_path)
+
+    outside_root = tmp_path / "main_app"
+    outside_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.chdir(outside_root)
+    monkeypatch.setenv("MT5PIPE_CONFIG", str(config_path))
+
+    inspection = inspect_artifact("dataset://xau_m1_core@1.0.0")
+
+    assert inspection.artifact.artifact_id == result.artifact_id
+    assert inspection.manifest_path.resolve() == result.manifest_path.resolve()
+    assert inspection.trust_decision_summary.startswith("accepted for publication")
+    assert inspection.split_row_counts == result.split_row_counts
 
 
 def test_compile_phase4_nonhuman_dataset_from_stable_selectors_over_wider_fixture(tmp_path, monkeypatch) -> None:

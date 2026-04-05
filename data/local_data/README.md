@@ -1,6 +1,6 @@
 Local data layout
 
-- `pipeline_data/`: active MT5Pipe storage root used by `config/pipeline.yaml`
+- `pipeline_data/`: active MT5Pipe storage root used by `data/config/pipeline.yaml`
 - `clean_data/`: curated dataset exports you want separate from pipeline internals
 - `archive_data/`: old scratch, throwaway, or manually dropped files
 

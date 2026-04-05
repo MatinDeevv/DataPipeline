@@ -212,7 +212,7 @@ The existing codebase has direct cross-sector imports that predate this boundary
 ## Phase 5 Hardening Notes
 
 - Production `DatasetSpec` files can now declare `required_raw_brokers`, `require_synchronized_raw_coverage`, `require_dual_source_overlap`, and `min_dual_source_ratio`. These are compiler-owned spec expectations and are enforced by truth as hard publication requirements.
-- The current production ML specs, [config/datasets/xau_m1_core_v1.yaml](/C:/Users/marti/Downloads/Datapipe/config/datasets/xau_m1_core_v1.yaml) and [config/datasets/xau_m1_nonhuman_v1.yaml](/C:/Users/marti/Downloads/Datapipe/config/datasets/xau_m1_nonhuman_v1.yaml), now target the verified synchronized live slice `2026-03-30` through `2026-04-02`.
+- The current production ML specs, `data/config/datasets/xau_m1_core_v1.yaml` and `data/config/datasets/xau_m1_nonhuman_v1.yaml`, now target the verified synchronized live slice `2026-03-30` through `2026-04-02`.
 - Raw tick ingest accounting now reports net-new rows added after dedup rather than the final row count of rewritten parquet partitions. Rerunning a synchronized backfill over a complete slice should show `rows_added=0`.
 - State, feature, and label manifests now point at compact artifact-scoped parquet roots keyed by artifact id/version. Public loaders prefer those immutable roots when an artifact id is available, then fall back to legacy logical roots for compatibility.
 - Canonical merge diagnostics and daily merge QA rewrite one canonical file per date on rerun. Downstream source-quality summaries should therefore see one authoritative daily row rather than duplicate rerun artifacts.

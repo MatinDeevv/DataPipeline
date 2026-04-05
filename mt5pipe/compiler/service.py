@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
@@ -62,7 +63,7 @@ MANDATORY_DATASET_COLUMNS = [
 ]
 
 DATASET_JOIN_KEYS = ["symbol", "timeframe", "time_utc"]
-DEFAULT_CONFIG_RELATIVE_PATH = Path("config/pipeline.yaml")
+DEFAULT_CONFIG_RELATIVE_PATH = Path("data/config/pipeline.yaml")
 STATE_CONTROL_COLUMNS = [
     "_filled",
     "quality_score",
@@ -190,11 +191,7 @@ class DatasetCompiler:
 
     @classmethod
     def from_config_path(cls, config_path: str | Path | None = None) -> tuple["DatasetCompiler", CatalogDB]:
-        resolved_config_path = _resolve_pipeline_config_path(config_path)
-        cfg = load_config(resolved_config_path)
-        paths = StoragePaths(cfg.storage.root)
-        store = ParquetStore(cfg.storage.compression, cfg.storage.parquet_row_group_size)
-        catalog = CatalogDB(paths.catalog_db_path())
+        cfg, paths, store, catalog = _load_compiler_runtime(config_path)
         return cls(cfg, paths, store, catalog), catalog
 
     def compile_dataset(self, spec_path: Path, *, publish: bool | None = None) -> BuildResult:
@@ -1221,14 +1218,15 @@ class DatasetCompiler:
         return manifest_path
 
     def _resolve_manifest_with_path(self, ref: str) -> tuple[LineageManifest, Path]:
-        maybe_path = Path(ref)
-        if maybe_path.exists():
-            return read_manifest_sidecar(maybe_path), maybe_path
+        if "://" not in ref:
+            maybe_path = _resolve_runtime_path(ref, paths=self._paths)
+            if maybe_path.exists():
+                return read_manifest_sidecar(maybe_path), maybe_path
 
         artifact = self._catalog.resolve_artifact(ref)
         if artifact is None:
             raise KeyError(f"Artifact '{ref}' was not found in the compiler catalog")
-        manifest_path = Path(artifact.manifest_uri)
+        manifest_path = _resolve_runtime_path(artifact.manifest_uri, paths=self._paths)
         return read_manifest_sidecar(manifest_path), manifest_path
 
     def _ensure_artifact_registered(self, manifest: LineageManifest, manifest_path: Path, *, detail: str) -> None:
@@ -1248,7 +1246,7 @@ class DatasetCompiler:
         for ref in manifest.input_partition_refs:
             if not _looks_like_bars_ref(ref):
                 continue
-            frame = self._store.read_dir(Path(ref))
+            frame = self._store.read_dir(_resolve_runtime_path(ref, paths=self._paths))
             if frame.is_empty():
                 continue
             frames.append(
@@ -1277,7 +1275,7 @@ class DatasetCompiler:
         date_from: dt.date,
         date_to: dt.date,
     ) -> pl.DataFrame:
-        frame = self._store.read_dir(Path(manifest.artifact_uri))
+        frame = self._store.read_dir(_resolve_runtime_path(manifest.artifact_uri, paths=self._paths))
         if frame.is_empty():
             raise FileNotFoundError(f"Artifact '{manifest.artifact_id}' has no readable parquet payload at {manifest.artifact_uri}")
         dedup_keys = [column for column in ["symbol", "timeframe", "clock", time_col] if column in frame.columns]
@@ -1448,6 +1446,13 @@ def _resolve_pipeline_config_path(config_path: str | Path | None = None) -> Path
             return resolved.resolve()
         raise FileNotFoundError(f"Config file not found: {resolved}")
 
+    env_path = os.environ.get("MT5PIPE_CONFIG")
+    if env_path:
+        candidate = Path(env_path)
+        if candidate.exists():
+            return candidate.resolve()
+        raise FileNotFoundError(f"Config file not found: {candidate}")
+
     candidate = _find_repo_config(Path.cwd())
     if candidate is not None:
         return candidate
@@ -1462,6 +1467,16 @@ def _find_repo_config(anchor: Path) -> Path | None:
         candidate = parent / DEFAULT_CONFIG_RELATIVE_PATH
         if candidate.exists():
             return candidate
+        legacy_candidate = parent / "config" / "pipeline.yaml"
+        if legacy_candidate.exists():
+            return legacy_candidate
+    for extra_root in [_package_project_root(), _package_data_root()]:
+        candidate = extra_root / DEFAULT_CONFIG_RELATIVE_PATH
+        if candidate.exists():
+            return candidate
+        legacy_candidate = extra_root / "config" / "pipeline.yaml"
+        if legacy_candidate.exists():
+            return legacy_candidate
     return None
 
 
@@ -1471,6 +1486,101 @@ def _infer_storage_root_from_manifest_path(path: Path) -> Path | None:
         if parent.name == "manifests":
             return parent.parent
     return None
+
+
+def _load_compiler_runtime(config_path: str | Path | None = None) -> tuple[PipelineConfig, StoragePaths, ParquetStore, CatalogDB]:
+    resolved_config_path = _resolve_pipeline_config_path(config_path)
+    cfg = load_config(resolved_config_path)
+    resolved_storage_root = _resolve_storage_root(cfg.storage.root, config_path=resolved_config_path)
+    if resolved_storage_root != cfg.storage.root:
+        cfg = cfg.model_copy(update={"storage": cfg.storage.model_copy(update={"root": resolved_storage_root})})
+    paths = StoragePaths(resolved_storage_root)
+    store = ParquetStore(cfg.storage.compression, cfg.storage.parquet_row_group_size)
+    catalog = CatalogDB(paths.catalog_db_path())
+    return cfg, paths, store, catalog
+
+
+def _resolve_storage_root(raw_root: str | Path, *, config_path: Path | None = None) -> Path:
+    root = Path(raw_root)
+    if root.is_absolute():
+        return root.resolve()
+
+    candidates: list[Path] = []
+    if config_path is not None:
+        resolved_config = Path(config_path).resolve()
+        config_dir = resolved_config.parent
+        data_dir = config_dir.parent
+        root_parts = root.parts
+        if config_dir.name == "config":
+            if root_parts and data_dir.name == root_parts[0]:
+                remainder = Path(*root_parts[1:]) if len(root_parts) > 1 else Path()
+                candidates.append((data_dir / remainder).resolve())
+            candidates.append((data_dir / root).resolve())
+            candidates.append((data_dir.parent / root).resolve())
+        candidates.extend((parent / root).resolve() for parent in resolved_config.parents)
+    candidates.extend(
+        [
+            (Path.cwd() / root).resolve(),
+            (_package_project_root() / root).resolve(),
+            (_package_data_root() / root).resolve(),
+        ]
+    )
+    unique_candidates = _unique_paths(candidates)
+    for candidate in unique_candidates:
+        if candidate.exists():
+            return candidate
+    return unique_candidates[0] if unique_candidates else root.resolve()
+
+
+def _resolve_runtime_path(raw_path: str | Path, *, paths: StoragePaths | None = None) -> Path:
+    path = Path(raw_path)
+    if path.is_absolute():
+        return path
+    if path.exists():
+        return path.resolve()
+
+    candidates: list[Path] = []
+    if paths is not None:
+        data_root = paths.root.parent.parent
+        candidates.extend(
+            [
+                (data_root / path).resolve(),
+                (paths.root / path).resolve(),
+                (paths.root.parent / path).resolve(),
+            ]
+        )
+    candidates.extend(
+        [
+            (Path.cwd() / path).resolve(),
+            (_package_data_root() / path).resolve(),
+            (_package_project_root() / path).resolve(),
+        ]
+    )
+    unique_candidates = _unique_paths(candidates)
+    for candidate in unique_candidates:
+        if candidate.exists():
+            return candidate
+    return unique_candidates[0] if unique_candidates else path.resolve()
+
+
+def _package_data_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _package_project_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _unique_paths(candidates: list[Path]) -> list[Path]:
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique
 
 
 def _walk_forward_splits(

@@ -17,7 +17,7 @@ console = Console()
 
 @status_app.command("show")
 def show_status(
-    config_path: str = typer.Option("config/pipeline.yaml", "--config"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config"),
 ) -> None:
     """Show pipeline status — checkpoints, job history, storage stats."""
     cfg = load_config(Path(config_path))
@@ -72,7 +72,7 @@ def show_status(
 
 @status_app.command("validate")
 def validate_storage(
-    config_path: str = typer.Option("config/pipeline.yaml", "--config"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config"),
 ) -> None:
     """Validate storage integrity — check parquet files are readable."""
     cfg = load_config(Path(config_path))

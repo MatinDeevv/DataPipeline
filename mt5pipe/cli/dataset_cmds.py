@@ -539,7 +539,7 @@ def build_dataset_cmd(
     date_to: str = typer.Option(..., "--to"),
     name: str = typer.Option("default", help="Dataset name"),
     base_timeframe: str = typer.Option("", help="Override base timeframe from config"),
-    config_path: str = typer.Option("config/pipeline.yaml", "--config"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config"),
 ) -> None:
     """Build a model-ready dataset with features and labels."""
     cfg = load_config(Path(config_path))
@@ -574,7 +574,7 @@ def build_dataset_cmd(
 def compile_dataset_cmd(
     spec_path: str = typer.Option(..., "--spec", help="Path to DatasetSpec YAML/JSON"),
     publish: bool = typer.Option(True, "--publish/--no-publish", help="Publish aliases when the trust gate accepts the artifact"),
-    config_path: str = typer.Option("config/pipeline.yaml", "--config", help="Legacy adapter config path"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config", help="Legacy adapter config path"),
 ) -> None:
     """Compile a versioned dataset artifact from a spec-driven, artifact-aware DatasetSpec."""
     try:
@@ -594,7 +594,7 @@ def compile_dataset_cmd(
 @dataset_app.command("inspect-dataset")
 def inspect_dataset_cmd(
     artifact_ref: str = typer.Option(..., "--artifact", help="Artifact id, logical ref, or manifest path"),
-    config_path: str = typer.Option("config/pipeline.yaml", "--config", help="Legacy adapter config path"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config", help="Legacy adapter config path"),
 ) -> None:
     """Inspect a compiled dataset artifact, its lineage sources, and its trust report."""
     try:
@@ -609,7 +609,7 @@ def inspect_dataset_cmd(
 def diff_dataset_cmd(
     left_ref: str = typer.Option(..., "--left", help="Left artifact id, logical ref, or manifest path"),
     right_ref: str = typer.Option(..., "--right", help="Right artifact id, logical ref, or manifest path"),
-    config_path: str = typer.Option("config/pipeline.yaml", "--config", help="Legacy adapter config path"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config", help="Legacy adapter config path"),
 ) -> None:
     """Compare two compiled dataset artifacts with deterministic lineage-aware summaries."""
     try:

@@ -91,7 +91,7 @@ def _make_inspection(
 ) -> SimpleNamespace:
     return SimpleNamespace(
         artifact_id=artifact_id,
-        manifest_path=Path(f"local_data/pipeline_data/manifests/kind=dataset/name={logical_name}/manifest.json"),
+        manifest_path=Path(f"data/local_data/pipeline_data/manifests/kind=dataset/name={logical_name}/manifest.json"),
         manifest=SimpleNamespace(
             artifact_id=artifact_id,
             logical_name=logical_name,
@@ -151,16 +151,16 @@ def test_compile_dataset_cli_success(monkeypatch) -> None:
                 logical_version="1.0.0",
                 status="published",
             ),
-            manifest_path=Path("local_data/pipeline_data/manifests/kind=dataset/name=xau_m1_core/manifest.json"),
+            manifest_path=Path("data/local_data/pipeline_data/manifests/kind=dataset/name=xau_m1_core/manifest.json"),
             trust_report=_make_trust_report(status="accepted", score=98.5),
         )
 
     compiler_service.compile_dataset_spec = fake_compile
 
-    result = runner.invoke(app, ["dataset", "compile-dataset", "--spec", "config/datasets/xau_m1_core_v1.yaml"])
+    result = runner.invoke(app, ["dataset", "compile-dataset", "--spec", "data/config/datasets/xau_m1_core_v1.yaml"])
 
     assert result.exit_code == 0
-    assert Path(calls[0][0]) == Path("config/datasets/xau_m1_core_v1.yaml")
+    assert Path(calls[0][0]) == Path("data/config/datasets/xau_m1_core_v1.yaml")
     assert calls[0][1] is True
     assert "artifact_id: dataset.xau_m1_core.20260404T190000Z.abc12345" in result.stdout
     assert "logical: xau_m1_core@1.0.0" in result.stdout

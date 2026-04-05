@@ -26,7 +26,7 @@ symbols:
   - XAUUSD
 
 storage:
-  root: "local_data/pipeline_data"
+  root: "data/local_data/pipeline_data"
   checkpoint_db: "checkpoints.db"
   parquet_row_group_size: 500000
   compression: "zstd"

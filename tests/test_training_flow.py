@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 from pathlib import Path
+import sqlite3
 
 import polars as pl
 import pytest
@@ -19,6 +21,7 @@ from tests.test_compiler import (
     UTC,
     _write_bars_by_date,
     _write_merge_qa,
+    _rewrite_artifact_manifest_to_relative,
     _write_project_config,
     _write_spec,
     _write_state_fixture_partitions,
@@ -177,6 +180,39 @@ def _prepare_training_project(tmp_path: Path) -> tuple[Path, Path, Path]:
     return project_root, dataset_spec, experiment_spec
 
 
+def _rewrite_training_manifests_to_relative(project_root: Path, experiment_artifact_id: str, experiment_manifest_path: Path, model_artifact_id: str, model_manifest_path: Path) -> None:
+    def _rewrite_manifest(manifest_path: Path, *, metadata_keys: list[str]) -> None:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        artifact_uri = Path(str(payload["artifact_uri"]))
+        if artifact_uri.is_absolute():
+            payload["artifact_uri"] = str(artifact_uri.relative_to(project_root))
+        metadata = dict(payload.get("metadata", {}))
+        for key in metadata_keys:
+            raw_value = metadata.get(key)
+            if not raw_value:
+                continue
+            raw_path = Path(str(raw_value))
+            if raw_path.is_absolute():
+                metadata[key] = str(raw_path.relative_to(project_root))
+        payload["metadata"] = metadata
+        manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    _rewrite_manifest(experiment_manifest_path, metadata_keys=["summary_path", "predictions_path"])
+    _rewrite_manifest(model_manifest_path, metadata_keys=["summary_path", "model_payload_path"])
+
+    catalog_path = project_root / "local_data" / "pipeline_data" / "catalog" / "catalog.db"
+    with sqlite3.connect(catalog_path) as conn:
+        conn.execute(
+            "UPDATE artifacts SET manifest_uri = ? WHERE artifact_id = ?",
+            (str(experiment_manifest_path.relative_to(project_root)), experiment_artifact_id),
+        )
+        conn.execute(
+            "UPDATE artifacts SET manifest_uri = ? WHERE artifact_id = ?",
+            (str(model_manifest_path.relative_to(project_root)), model_artifact_id),
+        )
+        conn.commit()
+
+
 def test_run_experiment_spec_registers_experiment_and_model_artifacts(tmp_path, monkeypatch) -> None:
     project_root, dataset_spec, experiment_spec = _prepare_training_project(tmp_path)
     monkeypatch.chdir(project_root)
@@ -231,6 +267,30 @@ def test_run_experiment_spec_registers_experiment_and_model_artifacts(tmp_path, 
         assert any(record.input_kind == "artifact" and record.input_ref == result.experiment_artifact_id for record in model_inputs)
     finally:
         catalog.close()
+
+    _rewrite_artifact_manifest_to_relative(project_root, dataset_result.artifact_id, dataset_result.manifest_path)
+    _rewrite_training_manifests_to_relative(
+        project_root,
+        result.experiment_artifact_id,
+        result.experiment_manifest_path,
+        result.model_artifact_id,
+        result.model_manifest_path,
+    )
+
+    outside_root = tmp_path / "external_training_client"
+    outside_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.chdir(outside_root)
+    monkeypatch.setenv("MT5PIPE_CONFIG", str(project_root / "config" / "pipeline.yaml"))
+
+    external_experiment_view = inspect_experiment(result.experiment_aliases[0])
+    external_model_view = inspect_model(result.model_aliases[0])
+    assert external_experiment_view.dataset_artifact is not None
+    assert external_experiment_view.dataset_artifact.artifact_id == dataset_result.artifact_id
+    assert external_experiment_view.predictions_path is not None
+    assert external_experiment_view.predictions_path.exists()
+    assert external_model_view.dataset_artifact is not None
+    assert external_model_view.dataset_artifact.artifact_id == dataset_result.artifact_id
+    assert external_model_view.summary["holdout_metrics"]["rows_scored"] > 0
 
 
 def test_run_experiment_spec_rejects_untrusted_dataset_artifact(tmp_path, monkeypatch) -> None:

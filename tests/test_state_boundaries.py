@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-STATE_ROOT = REPO_ROOT / "mt5pipe" / "state"
+STATE_ROOT = REPO_ROOT / "data" / "mt5pipe" / "state"
 
 FORBIDDEN_PREFIXES = [
     "mt5pipe.bars",

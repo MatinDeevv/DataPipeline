@@ -31,7 +31,7 @@ def backfill_ticks(
     symbol: str = typer.Option("XAUUSD", help="Symbol to backfill"),
     date_from: str = typer.Option(..., "--from", help="Start date YYYY-MM-DD"),
     date_to: str = typer.Option(..., "--to", help="End date YYYY-MM-DD"),
-    config_path: str = typer.Option("config/pipeline.yaml", "--config", help="Config file path"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config", help="Config file path"),
 ) -> None:
     """Backfill historical ticks for a broker/symbol."""
     cfg = load_config(Path(config_path))
@@ -77,7 +77,7 @@ def backfill_sync_ticks(
         "--hours-end",
         help="Optional UTC intraday window end, HH:MM",
     ),
-    config_path: str = typer.Option("config/pipeline.yaml", "--config", help="Config file path"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config", help="Config file path"),
 ) -> None:
     """Backfill raw ticks for both brokers over the same UTC date range."""
     cfg = load_config(Path(config_path))
@@ -127,7 +127,7 @@ def backfill_bars(
     timeframe: str = typer.Option("M5", help="Timeframe, e.g. M1, M5, H1"),
     date_from: str = typer.Option(..., "--from"),
     date_to: str = typer.Option(..., "--to"),
-    config_path: str = typer.Option("config/pipeline.yaml", "--config"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config"),
 ) -> None:
     """Backfill native bars for a broker/symbol/timeframe."""
     cfg = load_config(Path(config_path))
@@ -158,7 +158,7 @@ def backfill_history_orders(
     broker: str = typer.Option(...),
     date_from: str = typer.Option(..., "--from"),
     date_to: str = typer.Option(..., "--to"),
-    config_path: str = typer.Option("config/pipeline.yaml", "--config"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config"),
 ) -> None:
     """Backfill historical orders."""
     cfg = load_config(Path(config_path))
@@ -189,7 +189,7 @@ def backfill_history_deals(
     broker: str = typer.Option(...),
     date_from: str = typer.Option(..., "--from"),
     date_to: str = typer.Option(..., "--to"),
-    config_path: str = typer.Option("config/pipeline.yaml", "--config"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config"),
 ) -> None:
     """Backfill historical deals."""
     cfg = load_config(Path(config_path))
@@ -218,7 +218,7 @@ def backfill_history_deals(
 @backfill_app.command("symbol-metadata")
 def backfill_symbol_metadata(
     broker: str = typer.Option(...),
-    config_path: str = typer.Option("config/pipeline.yaml", "--config"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config"),
 ) -> None:
     """Capture symbol metadata and universe snapshot."""
     cfg = load_config(Path(config_path))

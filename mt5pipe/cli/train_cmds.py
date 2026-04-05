@@ -198,7 +198,7 @@ def _inspect_model_lines(result: Any) -> list[str]:
 @train_app.command("run-experiment")
 def run_experiment_cmd(
     spec_path: str = typer.Option(..., "--spec", help="Path to ExperimentSpec YAML/JSON"),
-    config_path: str = typer.Option("config/pipeline.yaml", "--config", help="Legacy adapter config path"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config", help="Legacy adapter config path"),
 ) -> None:
     """Run a trust-gated experiment and register experiment/model artifacts."""
     try:
@@ -212,7 +212,7 @@ def run_experiment_cmd(
 @train_app.command("inspect-experiment")
 def inspect_experiment_cmd(
     experiment_ref: str = typer.Option(..., "--experiment", help="Experiment artifact id, alias, or manifest path"),
-    config_path: str = typer.Option("config/pipeline.yaml", "--config", help="Legacy adapter config path"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config", help="Legacy adapter config path"),
 ) -> None:
     """Inspect a registered experiment artifact and its linked training summary."""
     try:
@@ -226,7 +226,7 @@ def inspect_experiment_cmd(
 @train_app.command("inspect-model")
 def inspect_model_cmd(
     model_ref: str = typer.Option(..., "--model", help="Model artifact id, alias, or manifest path"),
-    config_path: str = typer.Option("config/pipeline.yaml", "--config", help="Legacy adapter config path"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config", help="Legacy adapter config path"),
 ) -> None:
     """Inspect a registered model artifact and its evaluation summary."""
     try:

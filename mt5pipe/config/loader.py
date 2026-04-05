@@ -12,7 +12,7 @@ from pydantic import SecretStr
 from mt5pipe.config.models import BrokerConfig, PipelineConfig
 
 _CONFIG_ENV_VAR = "MT5PIPE_CONFIG"
-_DEFAULT_PATH = Path("config/pipeline.yaml")
+_DEFAULT_PATH = Path("data/config/pipeline.yaml")
 
 
 def _substitute_env(data: Any) -> Any:
@@ -38,6 +38,10 @@ def load_config(path: Path | str | None = None) -> PipelineConfig:
         path = Path(env_path) if env_path else _DEFAULT_PATH
 
     path = Path(path)
+    if not path.exists() and path == _DEFAULT_PATH:
+        legacy_path = Path("config/pipeline.yaml")
+        if legacy_path.exists():
+            path = legacy_path
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
 

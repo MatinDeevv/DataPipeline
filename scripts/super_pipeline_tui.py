@@ -611,7 +611,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Advanced MT5 pipeline orchestrator with Windows TUI.",
     )
-    parser.add_argument("--config", default="config/pipeline.yaml", help="Pipeline config path")
+    parser.add_argument("--config", default="data/config/pipeline.yaml", help="Pipeline config path")
     parser.add_argument("--symbol", default="XAUUSD", help="Trading symbol")
     parser.add_argument("--from", dest="date_from", required=True, help="Start date YYYY-MM-DD")
     parser.add_argument("--to", dest="date_to", required=True, help="End date YYYY-MM-DD")

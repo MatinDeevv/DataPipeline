@@ -34,7 +34,7 @@ class BrokerConfig(BaseModel):
 class StorageConfig(BaseModel):
     """Storage paths and settings."""
 
-    root: Path = Field(default=Path("local_data/pipeline_data"), description="Root pipeline data directory")
+    root: Path = Field(default=Path("data/local_data/pipeline_data"), description="Root pipeline data directory")
     checkpoint_db: str = Field(default="checkpoints.db", description="SQLite DB filename inside root")
     parquet_row_group_size: int = Field(default=500_000)
     compression: str = Field(default="zstd")

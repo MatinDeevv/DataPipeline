@@ -43,7 +43,7 @@ import pytest
 # ---------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-MT5PIPE = REPO_ROOT / "mt5pipe"
+MT5PIPE = REPO_ROOT / "data" / "mt5pipe"
 
 # Map: sector name → list of package prefixes owned by that sector
 SECTOR_PACKAGES: dict[str, list[str]] = {

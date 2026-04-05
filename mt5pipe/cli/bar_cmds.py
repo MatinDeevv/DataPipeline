@@ -20,7 +20,7 @@ def build_bars(
     timeframe: str = typer.Option("", help="Single timeframe or empty for all configured"),
     date_from: str = typer.Option(..., "--from"),
     date_to: str = typer.Option(..., "--to"),
-    config_path: str = typer.Option("config/pipeline.yaml", "--config"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config"),
 ) -> None:
     """Build bars from canonical ticks for one or all timeframes."""
     cfg = load_config(Path(config_path))

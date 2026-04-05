@@ -27,7 +27,7 @@ def merge_canonical(
     broker_b: str = typer.Option(..., help="Second broker ID"),
     date_from: str = typer.Option(..., "--from"),
     date_to: str = typer.Option(..., "--to"),
-    config_path: str = typer.Option("config/pipeline.yaml", "--config"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config"),
 ) -> None:
     """Merge raw ticks from two brokers into canonical feed."""
     cfg = load_config(Path(config_path))
@@ -81,7 +81,7 @@ def merge_qa_report(
     broker_b: str = typer.Option(..., help="Second broker ID"),
     date_from: str = typer.Option(..., "--from"),
     date_to: str = typer.Option(..., "--to"),
-    config_path: str = typer.Option("config/pipeline.yaml", "--config"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config"),
 ) -> None:
     """Generate and persist a daily merge QA report for a UTC date range."""
     cfg = load_config(Path(config_path))
@@ -126,7 +126,7 @@ def merge_bucket_sweep(
     date_from: str = typer.Option(..., "--from"),
     date_to: str = typer.Option(..., "--to"),
     bucket_values: str = typer.Option("50,75,100,125", "--buckets", help="Comma-separated bucket_ms values"),
-    config_path: str = typer.Option("config/pipeline.yaml", "--config"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config"),
 ) -> None:
     """Compare alternate bucket sizes after the daily merge QA report exists."""
     cfg = load_config(Path(config_path))

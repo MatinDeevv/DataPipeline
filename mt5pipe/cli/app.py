@@ -30,7 +30,7 @@ app.add_typer(status_app, name="status", help="Pipeline status and validation")
 
 @app.command("validate-storage")
 def validate_storage_shortcut(
-    config_path: str = typer.Option("config/pipeline.yaml", "--config"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config"),
 ) -> None:
     """Shortcut for status validate."""
     from mt5pipe.cli.status_cmds import validate_storage

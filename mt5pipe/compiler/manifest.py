@@ -16,7 +16,19 @@ from mt5pipe.config.models import MergeConfig
 from mt5pipe.storage.paths import StoragePaths
 
 
+def _resolve_spec_path(path: Path) -> Path:
+    if path.exists() or path.is_absolute():
+        return path
+
+    prefixed_path = Path("data") / path
+    if prefixed_path.exists():
+        return prefixed_path
+
+    return path
+
+
 def _load_yaml_or_json(path: Path) -> dict[str, Any]:
+    path = _resolve_spec_path(path)
     raw = path.read_text(encoding="utf-8")
     if path.suffix.lower() in {".yaml", ".yml"}:
         return yaml.safe_load(raw)

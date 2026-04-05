@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import datetime as dt
+import sys
 import tempfile
 from pathlib import Path
 
 import polars as pl
 import pytest
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SOURCE_ROOT = REPO_ROOT / "data"
+
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 from mt5pipe.storage.checkpoint_db import CheckpointDB
 from mt5pipe.storage.parquet_store import ParquetStore

@@ -31,8 +31,10 @@ from mt5pipe.compiler.manifest import (
 from mt5pipe.compiler.models import ExperimentSpec, LineageManifest
 from mt5pipe.compiler.service import (
     DatasetCompiler,
+    _load_compiler_runtime,
     _resolve_pipeline_config_path_from_ref,
     _resolve_pipeline_config_path_from_spec,
+    _resolve_runtime_path,
 )
 from mt5pipe.config.loader import load_config
 from mt5pipe.features.public import FeatureSpec
@@ -129,14 +131,7 @@ class ExperimentRunner:
 
     @classmethod
     def from_config_path(cls, config_path: str | Path | None = None) -> tuple["ExperimentRunner", CatalogDB]:
-        if config_path is not None:
-            resolved_config_path = Path(config_path).resolve()
-        else:
-            resolved_config_path = _resolve_pipeline_config_path_from_ref("")
-        cfg = load_config(resolved_config_path)
-        paths = StoragePaths(cfg.storage.root)
-        store = ParquetStore(cfg.storage.compression, cfg.storage.parquet_row_group_size)
-        catalog = CatalogDB(paths.catalog_db_path())
+        cfg, paths, store, catalog = _load_compiler_runtime(config_path)
         return cls(cfg, paths, store, catalog), catalog
 
     def run_experiment(self, spec_path: Path) -> ExperimentRunResult:
@@ -354,12 +349,12 @@ class ExperimentRunner:
         training_run = self._catalog.get_training_run(manifest.build_id)
         dataset_artifact = self._catalog.get_artifact(str(manifest.metadata.get("dataset_artifact_id", "")))
         dataset_manifest = (
-            read_manifest_sidecar(Path(dataset_artifact.manifest_uri))
+            read_manifest_sidecar(_resolve_runtime_path(dataset_artifact.manifest_uri, paths=self._paths))
             if dataset_artifact is not None
             else None
         )
-        summary = _load_json_payload(manifest.metadata.get("summary_path"))
-        predictions_path = _maybe_existing_path(manifest.metadata.get("predictions_path"))
+        summary = _load_json_payload(manifest.metadata.get("summary_path"), paths=self._paths)
+        predictions_path = _maybe_existing_path(manifest.metadata.get("predictions_path"), paths=self._paths)
         return ExperimentInspection(
             ref=ref,
             artifact=artifact,
@@ -394,8 +389,8 @@ class ExperimentRunner:
         training_run = self._catalog.get_training_run(manifest.build_id)
         dataset_artifact = self._catalog.get_artifact(str(manifest.metadata.get("dataset_artifact_id", "")))
         experiment_artifact = self._catalog.get_artifact(str(manifest.metadata.get("experiment_artifact_id", "")))
-        payload = _load_json_payload(manifest.metadata.get("model_payload_path"))
-        summary = _load_json_payload(manifest.metadata.get("summary_path"))
+        payload = _load_json_payload(manifest.metadata.get("model_payload_path"), paths=self._paths)
+        summary = _load_json_payload(manifest.metadata.get("summary_path"), paths=self._paths)
         return ModelInspection(
             ref=ref,
             artifact=artifact,
@@ -416,7 +411,7 @@ class ExperimentRunner:
         return DatasetCompiler(self._cfg, self._paths, self._store, self._catalog)
 
     def _load_dataset_split_frames(self, manifest: LineageManifest) -> dict[str, pl.DataFrame]:
-        artifact_root = Path(manifest.artifact_uri)
+        artifact_root = _resolve_runtime_path(manifest.artifact_uri, paths=self._paths)
         split_names = sorted(str(name) for name in dict(manifest.metadata.get("split_row_counts", {})))
         frames: dict[str, pl.DataFrame] = {}
         for split_name in split_names:
@@ -670,13 +665,14 @@ class ExperimentRunner:
         return manifest_path
 
     def _resolve_manifest_with_path(self, ref: str) -> tuple[LineageManifest, Path]:
-        maybe_path = Path(ref)
-        if maybe_path.exists():
-            return read_manifest_sidecar(maybe_path), maybe_path
+        if "://" not in ref:
+            maybe_path = _resolve_runtime_path(ref, paths=self._paths)
+            if maybe_path.exists():
+                return read_manifest_sidecar(maybe_path), maybe_path
         artifact = self._catalog.resolve_artifact(ref)
         if artifact is None:
             raise KeyError(f"Artifact '{ref}' was not found in the compiler catalog")
-        manifest_path = Path(artifact.manifest_uri)
+        manifest_path = _resolve_runtime_path(artifact.manifest_uri, paths=self._paths)
         return read_manifest_sidecar(manifest_path), manifest_path
 
 
@@ -1071,17 +1067,17 @@ def _combine_prediction_frames(
     )
 
 
-def _load_json_payload(raw_path: Any) -> dict[str, Any]:
-    path = _maybe_existing_path(raw_path)
+def _load_json_payload(raw_path: Any, *, paths: StoragePaths | None = None) -> dict[str, Any]:
+    path = _maybe_existing_path(raw_path, paths=paths)
     if path is None:
         return {}
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _maybe_existing_path(raw_path: Any) -> Path | None:
+def _maybe_existing_path(raw_path: Any, *, paths: StoragePaths | None = None) -> Path | None:
     if not raw_path:
         return None
-    path = Path(str(raw_path))
+    path = _resolve_runtime_path(str(raw_path), paths=paths)
     if not path.exists():
         return None
     return path

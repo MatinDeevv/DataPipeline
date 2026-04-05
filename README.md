@@ -364,23 +364,23 @@ Publication is not advisory. It is gated.
 The active storage root now defaults to:
 
 ```text
-local_data/pipeline_data/
+data/local_data/pipeline_data/
 ```
 
 This is configured in:
 
-- `config/pipeline.yaml`
-- `mt5pipe/config/models.py`
+- `data/config/pipeline.yaml`
+- `data/mt5pipe/config/models.py`
 
 ### Why `local_data/` Exists
 
 The repository intentionally separates code from local artifacts:
 
-- `local_data/pipeline_data/` - active storage root used by the pipeline
-- `local_data/clean_data/` - curated exports you want separated from pipeline internals
-- `local_data/archive_data/` - scratch or archived local files
+- `data/local_data/pipeline_data/` - active storage root used by the pipeline
+- `data/local_data/clean_data/` - curated exports you want separated from pipeline internals
+- `data/local_data/archive_data/` - scratch or archived local files
 
-Only `local_data/README.md` is tracked by git. The rest is intentionally ignored.
+Only `data/local_data/README.md` is tracked by git. The rest is intentionally ignored.
 
 ### Storage Path Taxonomy
 
@@ -677,7 +677,7 @@ This is useful for continuity, but the compiler path is the more important resea
 ### Compiler Dataset Build
 
 ```bash
-mt5pipe dataset compile-dataset --spec config/datasets/xau_m1_core_v1.yaml
+mt5pipe dataset compile-dataset --spec data/config/datasets/xau_m1_core_v1.yaml
 ```
 
 ### Inspect a Published or Materialized Artifact
@@ -713,7 +713,7 @@ mt5pipe validate-storage
 This repository includes a richer operator-facing TUI / orchestrator:
 
 ```bash
-RUN_ME.bat
+data/RUN_ME.bat
 ```
 
 Or directly:
@@ -732,7 +732,7 @@ mt5pipe-super --from 2026-04-01 --to 2026-04-30
 
 The default Phase 1 example is:
 
-`config/datasets/xau_m1_core_v1.yaml`
+`data/config/datasets/xau_m1_core_v1.yaml`
 
 It currently defines:
 
@@ -781,18 +781,18 @@ Core dependencies:
 
 Primary runtime config:
 
-- `config/pipeline.yaml`
+- `data/config/pipeline.yaml`
 
 Secrets template:
 
-- `config/example_secrets.env`
+- `data/config/example_secrets.env`
 
 Typical workflow:
 
-1. Copy `config/example_secrets.env` to your own env file.
+1. Copy `data/config/example_secrets.env` to your own env file.
 2. Update broker credentials and terminal paths.
 3. Adjust symbol maps if broker symbols differ.
-4. Keep `storage.root` pointed at `local_data/pipeline_data`.
+4. Keep `storage.root` pointed at `data/local_data/pipeline_data`.
 
 ## Reproducibility and Artifact Identity
 
@@ -885,24 +885,25 @@ That workflow gives you:
 
 ```text
 Datapipe/
-  config/
-    datasets/
-    example_secrets.env
-    pipeline.yaml
-  local_data/
-    README.md
-  mt5pipe/
-    backfill/
-    bars/
-    catalog/
-    cli/
-    compiler/
+  data/
     config/
-    features/
-      context/
-      quality/
-      registry/
-      session/
+      datasets/
+      example_secrets.env
+      pipeline.yaml
+    local_data/
+      README.md
+    mt5pipe/
+      backfill/
+      bars/
+      catalog/
+      cli/
+      compiler/
+      config/
+      features/
+        context/
+        quality/
+        registry/
+        session/
       time/
     ingestion/
     labels/

@@ -105,11 +105,11 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 
 def _find_config() -> Path:
-    for candidate in ("config/pipeline.yaml", "pipeline.yaml", "config.yaml"):
+    for candidate in ("data/config/pipeline.yaml", "config/pipeline.yaml", "pipeline.yaml", "config.yaml"):
         p = Path(candidate)
         if p.exists():
             return p.resolve()
-    return Path("config/pipeline.yaml").resolve()
+    return Path("data/config/pipeline.yaml").resolve()
 
 
 def _ensure_deps() -> None:
@@ -138,7 +138,7 @@ def _write_step_failure_log(
     started_ts: float,
     ended_ts: float,
 ) -> Path:
-    log_dir = Path("logs") / "pipeline_failures"
+    log_dir = Path("data/logs") / "pipeline_failures"
     log_dir.mkdir(parents=True, exist_ok=True)
 
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -672,7 +672,7 @@ def run() -> int:
     config_path = _find_config()
     if not config_path.exists():
         console.print(f"[red]Config not found:[/] {config_path}")
-        console.print("[dim]Create config/pipeline.yaml with your broker terminal_path entries.[/]")
+        console.print("[dim]Create data/config/pipeline.yaml with your broker terminal_path entries.[/]")
         return 2
     console.print(f"  Config   [dim]{config_path}[/]")
     console.print()

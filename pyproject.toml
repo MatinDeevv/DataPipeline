@@ -38,4 +38,4 @@ testpaths = ["tests"]
 addopts = "-v --tb=short"
 
 [tool.hatch.build.targets.wheel]
-packages = ["mt5pipe"]
+packages = ["data/mt5pipe"]

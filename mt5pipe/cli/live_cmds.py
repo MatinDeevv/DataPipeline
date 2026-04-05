@@ -20,7 +20,7 @@ def live_collect(
     symbol: str = typer.Option("XAUUSD", help="Symbol to collect"),
     enable_book: bool = typer.Option(True, help="Enable market book/DOM collection"),
     duration: int = typer.Option(0, help="Collect for N seconds then exit (0=infinite, Ctrl+C to stop)"),
-    config_path: str = typer.Option("config/pipeline.yaml", "--config"),
+    config_path: str = typer.Option("data/config/pipeline.yaml", "--config"),
 ) -> None:
     """Start live tick and snapshot collection for a broker/symbol."""
     cfg = load_config(Path(config_path))

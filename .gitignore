@@ -4,7 +4,10 @@ __pycache__/
 *.py[cod]
 
 # Legacy local storage roots
-data/
+data/**
+!data/local_data/
+data/local_data/**
+!data/local_data/README.md
 gooddata/
 suselss/
 
